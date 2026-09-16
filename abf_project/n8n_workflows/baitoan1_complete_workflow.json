@@ -1,0 +1,306 @@
+{
+  "id": "6CAEnmFzLwS0VBbH",
+  "name": "ABF Bài Toán 1: Tự Động Phân Tích Insights TikTok & Zalo từ Supabase DB",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "894cf2cf-3fd3-4a9a-a115-2c8e0f837621",
+      "name": "1. Schedule Trigger (T2 - 08:00 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        3820,
+        1450
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Node 2A: Cào Comment TikTok từ Kênh @baothetindung.abf & Lọc Trùng\nconst apifyToken = process.env.APIFY_TOKEN || 'YOUR_APIFY_TOKEN';\nconst targetUrl = 'https://www.tiktok.com/@baothetindung.abf';\nconst limitPerPost = 50;\n\nconst staticData = $getWorkflowStaticData('global');\nstaticData.tiktokCommentCounts = staticData.tiktokCommentCounts || {};\nstaticData.seenCommentIds = staticData.seenCommentIds || [];\n\nconsole.log(`🚀 [Node 2A - TikTok] Bắt đầu cào comment từ Kênh: ${targetUrl}`);\n\nlet posts = [];\ntry {\n  posts = await helpers.httpRequest({\n    method: 'POST',\n    url: `https://api.apify.com/v2/acts/clockworks~free-tiktok-scraper/run-sync-get-dataset-items?token=${apifyToken}`,\n    headers: { 'Content-Type': 'application/json' },\n    body: {\n      profiles: [targetUrl],\n      resultsPerPage: 20,\n      commentsPerPost: limitPerPost,\n      shouldDownloadVideos: false,\n      shouldDownloadCovers: false\n    },\n    json: true\n  });\n} catch (err) {\n  console.error('❌ Lỗi gọi Apify TikTok Scraper:', err.message || err);\n  posts = [];\n}\n\nif (!Array.isArray(posts)) posts = [];\n\nconst allTikTokComments = [];\nconst seenSet = new Set(staticData.seenCommentIds);\n\nfor (const post of posts) {\n  const videoUrl = post.webVideoUrl || post.url || targetUrl;\n  const videoId = String(post.id || videoUrl);\n  const currentCommentCount = Number(post.commentCount || post.stats?.commentCount || 0);\n  const lastCommentCount = staticData.tiktokCommentCounts[videoId] || 0;\n\n  if (currentCommentCount > 0 && currentCommentCount <= lastCommentCount && !post.commentsDatasetUrl) {\n    continue;\n  }\n\n  const commentsDatasetUrl = post.commentsDatasetUrl;\n  \n  if (commentsDatasetUrl) {\n    try {\n      const commentsData = await helpers.httpRequest({\n        method: 'GET',\n        url: commentsDatasetUrl,\n        json: true\n      });\n      \n      if (Array.isArray(commentsData)) {\n        for (const c of commentsData) {\n          const commentText = (c.text || c.content || c.commentText || '').trim();\n          const commentId = String(c.id || c.cid || `${c.uniqueId}_${commentText}`);\n\n          if (commentText.length > 0 && !seenSet.has(commentId)) {\n            seenSet.add(commentId);\n            allTikTokComments.push({\n              platform: 'tiktok',\n              group_or_page: 'baothetindung.abf',\n              author: String(c.uniqueId || c.nickname || c.author || 'TikTok_User').substring(0, 100),\n              content: commentText,\n              comment_created_at: c.createTimeISO || c.createdAt || (c.createTime ? new Date(c.createTime * 1000).toISOString() : new Date().toISOString()),\n              source_url: videoUrl,\n              status: 'pending'\n            });\n          }\n        }\n      }\n    } catch (e) {\n      console.error(`⚠️ Lỗi tải commentsDatasetUrl cho bài ${videoUrl}:`, e.message || e);\n    }\n  } else if (post.text && post.text.trim().length > 0) {\n    const textId = `post_${videoId}_${post.text.trim().substring(0, 30)}`;\n    if (!seenSet.has(textId)) {\n      seenSet.add(textId);\n      allTikTokComments.push({\n        platform: 'tiktok',\n        group_or_page: 'baothetindung.abf',\n        author: String(post.authorMeta?.nickName || post.authorMeta?.name || 'baothetindung.abf').substring(0, 100),\n        content: post.text.trim(),\n        comment_created_at: post.createTimeISO || new Date().toISOString(),\n        source_url: videoUrl,\n        status: 'pending'\n      });\n    }\n  }\n\n  staticData.tiktokCommentCounts[videoId] = Math.max(currentCommentCount, lastCommentCount);\n}\n\nstaticData.seenCommentIds = Array.from(seenSet).slice(-2000);\n\nconsole.log(`✅ [Node 2A - TikTok] Đã tìm thấy ${allTikTokComments.length} comment TikTok MỚI!`);\nreturn allTikTokComments.map(item => ({ json: item }));\n"
+      },
+      "id": "node-2a-tiktok",
+      "name": "2A. Code Node (Crawl TikTok Comments via Apify)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4080,
+        1320
+      ],
+      "alwaysOutputData": false,
+      "disabled": false
+    },
+    {
+      "parameters": {
+        "tableId": "raw_comments",
+        "dataToSend": "autoMapInputData"
+      },
+      "id": "84354de8-8a71-4099-b629-47cc6f6ec0e5",
+      "name": "3A. Supabase Node (Save TikTok Raw to DB)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4340,
+        1320
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "Tz4bfXzQGmBJYouj",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "raw_comments",
+        "returnAll": true,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "pending"
+            }
+          ]
+        }
+      },
+      "id": "node-fetch-supabase-pending",
+      "name": "2B. Supabase Node (Lấy Toàn Bộ Tin Nhắn Zalo & TikTok Pending)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4080,
+        1580
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "Tz4bfXzQGmBJYouj",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// NHÁNH 3B: Gom TOÀN BỘ comment & tin nhắn Zalo/TikTok từ Supabase -> Xây dựng Prompt phân tích chi tiết & Định hướng Giám Đốc\nconst allComments = $input.all().map((item, index) => ({\n  id: item.json.id,\n  index: index + 1,\n  platform: item.json.platform || 'social',\n  group_or_page: item.json.group_or_page || '',\n  author: item.json.author || 'User',\n  content: item.json.content\n})).filter(c => c.content && String(c.content).trim().length > 0);\n\nif (allComments.length === 0) {\n  return [];\n}\n\nconst promptText = `Bạn là chuyên gia phân tích dữ liệu nhu cầu thẻ tín dụng và cố vấn chiến lược tài chính người dùng cho Ban Giám Đốc ABF.\n\nDưới đây là danh sách comment/tin nhắn thu thập từ Database (TikTok & Nhóm Zalo Bào Thẻ Thông Minh). Hãy phân tích kỹ từng comment/tin nhắn và trả về ĐÚNG 1 mảng JSON chuẩn (không chứa bất kỳ markdown, lời chào hay text nào ngoài mảng JSON) theo định dạng:\n[\n  {\n    \"index\": 1,\n    \"spending_category\": \"du_lich|mua_sam_online|tra_gop|rut_tien|an_uong|sang_ngang_the|hoan_tien|khac\",\n    \"target_bank\": \"Tên ngân hàng cụ thể khách hàng đang quan tâm hoặc sở hữu (ví dụ: VIB, VPBank, Techcombank, TPBank, Sacombank, HSBC, MB,...) hoặc 'Chưa xác định'\",\n    \"target_card\": \"Tên dòng thẻ tín dụng cụ thể (ví dụ: Max Card, StepUp, Travel Élite, Cash Back, Live+, Signature, Platinum,...) hoặc 'Chưa xác định'\",\n    \"intent\": \"hoi_dieu_kien_mo_the|hoi_uu_dai|so_sanh_the|ho_tro_sang_ngang|tu_van_tra_gop_rut_tien|khac\",\n    \"summary\": \"Tóm tắt 1-2 câu: Khách hàng đang cần gì, thuộc lĩnh vực chi tiêu nào, quan tâm dòng thẻ hay ngân hàng nào cụ thể.\",\n    \"director_action\": \"1-2 câu đưa ra định hướng chiến lược & hành động đề xuất cho Ban Giám Đốc ABF (ví dụ: Đề xuất Ban Giám Đốc đẩy mạnh chương trình tư vấn sang ngang thẻ VIB Max Card và tiếp cận nhóm khách hàng có nhu cầu hoàn tiền học phí/mua sắm).\"\n  }\n]\n\nYêu cầu phân tích chặt chẽ:\n1. 'spending_category': Phân loại chính xác lĩnh vực chi tiêu trọng tâm.\n2. 'target_bank': Nhận diện đúng tên ngân hàng được đề cập.\n3. 'target_card': Nhận diện đúng tên dòng thẻ tín dụng.\n4. 'intent': Xác định động cơ chính của khách hàng.\n5. 'summary': Tóm tắt súc tích nhu cầu thực tế của khách.\n6. 'director_action': Đưa ra giải pháp/hành động kinh doanh giá trị cao cho Ban Giám Đốc để tối ưu tỷ lệ chuyển đổi mở thẻ.\n\nDanh sách comment/tin nhắn cần phân tích:\n${JSON.stringify(allComments, null, 2)}`;\n\nconst payloadObj = {\n  contents: [\n    {\n      parts: [\n        { text: promptText }\n      ]\n    }\n  ],\n  generationConfig: {\n    responseMimeType: \"application/json\"\n  }\n};\n\nreturn [{\n  json: {\n    total_count: allComments.length,\n    comment_ids: allComments.map(c => c.id).filter(Boolean),\n    gemini_payload_str: JSON.stringify(payloadObj)\n  }\n}];"
+      },
+      "id": "06c6d44d-b503-4256-88a6-092de5c2e87a",
+      "name": "3B. Code Node (Gom Tất Cả Comment & Build Payload)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4460,
+        1580
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.gemini_payload_str }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        4680,
+        1580
+      ],
+      "id": "f13a4677-e522-4d55-8c35-747522514ece",
+      "name": "Message a model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Q62Aqg1EloyvcHzF",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Unpack mảng kết quả JSON từ Gemini với cơ chế 2 lớp (JSON.parse + Regex Object Fallback)\nconst jsonInput = $input.first()?.json || {};\n\nlet rawText = '';\nif (typeof jsonInput === 'string') {\n  rawText = jsonInput;\n} else if (jsonInput?.content?.parts?.[0]?.text) {\n  rawText = jsonInput.content.parts[0].text;\n} else if (jsonInput?.text) {\n  rawText = jsonInput.text;\n} else if (jsonInput?.candidates?.[0]?.content?.parts?.[0]?.text) {\n  rawText = jsonInput.candidates[0].content.parts[0].text;\n} else {\n  rawText = JSON.stringify(jsonInput);\n}\n\n// Xóa markdown ```json nếu có\nrawText = rawText.replace(/```json/gi, '').replace(/```/gi, '').trim();\n\nlet aiArray = [];\n\n// LỚP 1: Thử parse toàn bộ mảng JSON chuẩn\ntry {\n  const firstB = rawText.indexOf('[');\n  const lastB = rawText.lastIndexOf(']');\n  if (firstB !== -1 && lastB !== -1 && lastB > firstB) {\n    aiArray = JSON.parse(rawText.substring(firstB, lastB + 1));\n  }\n} catch (e1) {}\n\n// LỚP 2: Nếu lớp 1 thất bại (do ký tự escape, dấu phẩy thừa hoặc bị cắt đuôi), dùng Regex bóc tách từng object\nif (!Array.isArray(aiArray) || aiArray.length === 0) {\n  const objMatches = rawText.match(/\\{[\\s\\S]*?\\\"spending_category\\\"[\\s\\S]*?\\}/g) || [];\n  for (const objStr of objMatches) {\n    try {\n      const parsed = JSON.parse(objStr);\n      if (parsed && typeof parsed === 'object') {\n        aiArray.push(parsed);\n      }\n    } catch (e2) {\n      try {\n        const cleaned = objStr.replace(/,\\s*([\\}\\]])/g, '$1');\n        aiArray.push(JSON.parse(cleaned));\n      } catch (e3) {}\n    }\n  }\n}\n\nreturn aiArray.map(item => ({\n  json: {\n    spending_category: item.spending_category || 'khac',\n    target_bank: item.target_bank || 'Chưa xác định',\n    target_card: item.target_card || 'Chưa xác định',\n    intent: item.intent || 'khac',\n    summary: item.summary || 'Khách hàng quan tâm đến dịch vụ thẻ tín dụng.',\n    director_action: item.director_action || 'Đề xuất Ban Giám đốc chỉ đạo chuyên viên tư vấn tiếp cận và hỗ trợ kịp thời.'\n  }\n}));\n"
+      },
+      "id": "a6ba46c0-1a81-4984-9b44-1a5b5846ada0",
+      "name": "6. Code Node (Unpack Output Gemini Mảng JSON)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5000,
+        1580
+      ],
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "tableId": "insights",
+        "dataToSend": "autoMapInputData"
+      },
+      "id": "694b0cab-43a1-47c2-a358-c182bbcda8e9",
+      "name": "7. Supabase Node (Insert Insights)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        5280,
+        1580
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "Tz4bfXzQGmBJYouj",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Gom toàn bộ các bản ghi insights đã xử lý thành 1 item để gửi bản tin báo cáo Telegram\nconst allItems = $input.all();\nreturn [{\n  json: {\n    total_processed: allItems.length,\n    timestamp: new Date().toISOString()\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5540,
+        1580
+      ],
+      "id": "1ed21797-a610-4a26-b7c0-6a6d332fb3c0",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "chatId": "=8524657349",
+        "text": "=📊 <b>[BÁO CÁO ĐỊNH KỲ] TỔNG HỢP NHU CẦU & INSIGHT KHÁCH HÀNG ABF</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🗓 <b>Kỳ báo cáo:</b> Báo cáo Thứ 2 Hàng Tuần\n\n📈 <b>TỔNG QUAN DỮ LIỆU GHI NHẬN MỚI:</b>\n• <b>Tổng số phản hồi vừa tiếp nhận & xử lý:</b> {{ $json.total_processed }} phản hồi mới (từ Kênh TikTok & Nhóm Zalo Bào Thẻ Thông Minh)\n• <b>Tình trạng xử lý:</b> Đã tự động phân loại lĩnh vực chi tiêu, dòng thẻ, ngân hàng và trích xuất định hướng điều hành.\n\n🎯 <b>ĐỊNH HƯỚNG BAN GIÁM ĐỐC & ĐỘI NGŨ KINH DOANH:</b>\n• Tập trung tư vấn các dòng thẻ hoàn tiền mua sắm & du lịch đang có lượng quan tâm cao nhất.\n• Đội ngũ tư vấn chủ động liên hệ hỗ trợ nhóm khách hàng có nhu cầu sang ngang thẻ và chuyển đổi trả góp.\n\n🔗 <b>Xem chi tiết báo cáo và phân tích trên Dashboard:</b>\nhttps://insights-abf.vercel.app\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n<i>Chúc Ban Giám đốc và Team một tuần làm việc hiệu quả và bùng nổ doanh số!</i>",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "1cd8ebc9-2144-4755-93ee-a80ef7e0eef7",
+      "name": "9. Telegram Bot (Send Weekly BOD Alert)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        5800,
+        1580
+      ],
+      "webhookId": "78917821-18c7-44a6-9fcc-897f5f7900d4",
+      "credentials": {
+        "telegramApi": {
+          "id": "ODNMnkhY2CwNMvrz",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "1. Schedule Trigger (T2 - 08:00 AM)": {
+      "main": [
+        [
+          {
+            "node": "2A. Code Node (Crawl TikTok Comments via Apify)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "2B. Supabase Node (Lấy Toàn Bộ Tin Nhắn Zalo & TikTok Pending)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2A. Code Node (Crawl TikTok Comments via Apify)": {
+      "main": [
+        [
+          {
+            "node": "3A. Supabase Node (Save TikTok Raw to DB)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2B. Supabase Node (Lấy Toàn Bộ Tin Nhắn Zalo & TikTok Pending)": {
+      "main": [
+        [
+          {
+            "node": "3B. Code Node (Gom Tất Cả Comment & Build Payload)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3B. Code Node (Gom Tất Cả Comment & Build Payload)": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "6. Code Node (Unpack Output Gemini Mảng JSON)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Code Node (Unpack Output Gemini Mảng JSON)": {
+      "main": [
+        [
+          {
+            "node": "7. Supabase Node (Insert Insights)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Supabase Node (Insert Insights)": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "9. Telegram Bot (Send Weekly BOD Alert)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null
+}

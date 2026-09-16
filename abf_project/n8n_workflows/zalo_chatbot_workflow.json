@@ -1,0 +1,366 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check_dm",
+              "leftValue": "={{ $json.message?.data?.idTo || $json.data?.idTo }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "202680751755972517"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1440,
+        416
+      ],
+      "id": "dc20ef0f-82fd-45e9-b7ea-7575a99c5b45",
+      "name": "Tin nhắn riêng 1-1?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check_target_group",
+              "leftValue": "={{ $json.message?.data?.idTo || $json.data?.idTo }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "1836257602307063566"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        560
+      ],
+      "id": "ea57d425-20aa-499e-93de-bc0927aeac93",
+      "name": "Đúng nhóm 1836257602307063566?"
+    },
+    {
+      "parameters": {
+        "eventTypes": [
+          1
+        ]
+      },
+      "type": "n8n-nodes-zalo-tools.zaloMessageTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1696,
+        416
+      ],
+      "id": "5206b766-ba3b-434e-99d2-124a34e9beac",
+      "name": "Zalo Message Trigger",
+      "webhookId": "532378df-1476-45ee-9fb2-1fe89a30e918",
+      "credentials": {
+        "zaloApi": {
+          "id": "MmeG5ySZVx5xhQab",
+          "name": "Zalo API Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "8524657349",
+        "text": "=🚨 *CÓ KHÁCH HÀNG INBOX ZALO TƯ VẤN THẺ*\n\n👤 *Khách hàng:* {{ $json.message?.data?.dName || 'Khách' }} (ID: `{{ $json.message?.data?.uidFrom || $json.data?.uidFrom }}`)\n💬 *Nội dung:* {{ $json.message?.data?.content || $json.data?.content }}\n⏰ *Thời gian:* {{ $now.format('DD/MM/YYYY HH:mm:ss') }}\n\n👉 *Sale vào Zalo mở cuộc trò chuyện tư vấn ngay!*",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -1200,
+        272
+      ],
+      "id": "709033cb-74fd-4ca4-a27e-cd5cad65f23f",
+      "name": "Báo Sale qua Telegram1",
+      "webhookId": "78775f6f-f0db-473d-bfd0-72cd03b574f4",
+      "credentials": {
+        "telegramApi": {
+          "id": "ODNMnkhY2CwNMvrz",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Câu hỏi từ thành viên trong group: {{ $json.message?.data?.content || $json.data?.content }}",
+        "options": {
+          "systemMessage": "Bạn là chuyên viên tư vấn mở thẻ tín dụng của cộng đồng Cardfinds trên Zalo.\n\nQuy tắc chat Zalo (BẮT BUỘC):\n1. NGẮN GỌN & TỰ NHIÊN: Chat tự nhiên, ngắn gọn như người thật nhắn tin Zalo. Tuyệt đối không viết quá dài dòng, không dùng markdown tiêu đề (như # hoặc **), không dùng danh sách bullet points dài lê thê.\n2. TÁCH TIN NHẮN: Nếu câu trả lời có nhiều ý, hãy tách các ý thành các đoạn ngắn (mỗi đoạn 1-2 câu) và phân cách bằng 2 dấu xuống dòng (\\n\\n) để hệ thống tự động gửi thành nhiều tin nhắn riêng biệt.\n3. NỘI DUNG: Tra cứu chính sách/điều kiện mở thẻ tín dụng từ RAG (hạn mức, phí thường niên, hoàn tiền...). Đưa ra gợi ý phù hợp.\n4. ĐIỀU HƯỚNG: Gợi ý khéo léo để khách nhắn tin riêng (inbox) cho Admin để bảo mật thông tin tài chính và được lên hồ sơ duyệt nhanh: \"Anh/chị nhắn tin riêng (inbox) trực tiếp cho Admin để bên em hỗ trợ lên hồ sơ bảo mật nhé!\""
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -944,
+        544
+      ],
+      "id": "072e41a9-8c46-4530-a2a3-9f6f72e177b2",
+      "name": "AI Agent Cardfinds1"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.6-flash",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -1008,
+        752
+      ],
+      "id": "0ceec561-492d-4d75-90c3-b15cfe93eabf",
+      "name": "Google Gemini Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Q62Aqg1EloyvcHzF",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolName": "card_knowledge_retriever",
+        "toolDescription": "Tra cứu chính sách, điều kiện, ưu đãi, hoàn tiền và thủ tục mở các dòng thẻ tín dụng ngân hàng (VIB, VPBank, Techcombank...).",
+        "tableName": {
+          "__rl": true,
+          "value": "documents",
+          "mode": "list",
+          "cachedResultName": "documents"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1,
+      "position": [
+        -784,
+        752
+      ],
+      "id": "31e18213-bcb9-444a-89b9-d14123d68bf9",
+      "name": "Supabase Vector Store (RAG)1",
+      "credentials": {
+        "supabaseApi": {
+          "id": "Tz4bfXzQGmBJYouj",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-embedding-001"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -784,
+        944
+      ],
+      "id": "dfcbe9ee-7a08-4047-9f43-0249aaa3a11d",
+      "name": "Embeddings Google Gemini2",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Q62Aqg1EloyvcHzF",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = $input.first().json.output || '';\n// Chia nhỏ tin nhắn dựa trên hai ký tự xuống dòng liên tiếp\nconst paragraphs = output.split(/\\n\\n+/).map(p => p.trim()).filter(p => p.length > 0);\n\nconst items = [];\nlet accumulatedDelay = 0;\n\nfor (let i = 0; i < paragraphs.length; i++) {\n  let delay = 0;\n  if (i > 0) {\n    // Thời gian trễ ngẫu nhiên từ 5s đến 12s cho các tin nhắn sau tin nhắn đầu tiên\n    const randomSec = Math.floor(Math.random() * 8) + 5;\n    accumulatedDelay += randomSec;\n    delay = accumulatedDelay;\n  }\n  items.push({\n    json: {\n      message: paragraphs[i],\n      delay: delay,\n      index: i,\n      total: paragraphs.length\n    }\n  });\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -736,
+        544
+      ],
+      "id": "chia_nho_tin_nhan",
+      "name": "Chia Nhỏ Tin Nhắn"
+    },
+    {
+      "parameters": {
+        "resume": "afterTimeInterval",
+        "amount": "={{ $json.delay }}",
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        -544,
+        544
+      ],
+      "id": "cho_gui_tin_nhan",
+      "name": "Chờ Gửi Tin Nhắn"
+    },
+    {
+      "parameters": {
+        "threadId": "1836257602307063566",
+        "type": 1,
+        "message": "={{ $json.message }}",
+        "quote": {},
+        "mentions": {}
+      },
+      "type": "n8n-nodes-zalo-tools.zaloSendMessage",
+      "typeVersion": 4,
+      "position": [
+        -352,
+        544
+      ],
+      "id": "a2dee884-4aae-4e8d-a21d-26dfaa00d9cb",
+      "name": "Gửi câu trả lời vào Group1",
+      "credentials": {
+        "zaloApi": {
+          "id": "MmeG5ySZVx5xhQab",
+          "name": "Zalo API Credentials"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Tin nhắn riêng 1-1?": {
+      "main": [
+        [
+          {
+            "node": "Báo Sale qua Telegram1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Đúng nhóm 1836257602307063566?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Đúng nhóm 1836257602307063566?": {
+      "main": [
+        [
+          {
+            "node": "AI Agent Cardfinds1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zalo Message Trigger": {
+      "main": [
+        [
+          {
+            "node": "Tin nhắn riêng 1-1?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Cardfinds1": {
+      "main": [
+        [
+          {
+            "node": "Chia Nhỏ Tin Nhắn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chia Nhỏ Tin Nhắn": {
+      "main": [
+        [
+          {
+            "node": "Chờ Gửi Tin Nhắn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chờ Gửi Tin Nhắn": {
+      "main": [
+        [
+          {
+            "node": "Gửi câu trả lời vào Group1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Cardfinds1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Vector Store (RAG)1": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Cardfinds1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini2": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Supabase Vector Store (RAG)1",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b6261f3fbfc4b59b359c13eb282a609a46db8124fe505f079cc12309bfe952d7"
+  }
+}

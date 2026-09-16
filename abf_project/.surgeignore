@@ -1,0 +1,14 @@
+__pycache__
+zalo_browser_profile
+zao
+n8n_workflows
+taste_skill_lib
+.env
+*.py
+*.bat
+*.docx
+*.sql
+*.md
+.git
+.vercelignore
+vercel.json

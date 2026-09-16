@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ABF Credit Card Market Intelligence - BOD Dashboard</title>
+  <meta name="description" content="Dashboard phân tích nhu cầu thẻ tín dụng từ Social Media (TikTok, Facebook, Zalo) dành cho Ban Giám Đốc (BOD) ABF.">
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="images.png">
+
+  <!-- Typography: Plus Jakarta Sans (Headlines/KPIs) & Inter (Data & Body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Minimalist Linear/Vercel Stylesheet -->
+  <link rel="stylesheet" href="styles.css">
+  
+  <!-- Supabase JS Client & Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+
+  <div class="app-container">
+    
+    <!-- Top Global Header -->
+    <header class="top-header">
+      <div class="brand-section">
+        <img src="images.png" alt="ABF Logo" class="brand-logo-img" width="40" height="40" style="width: 40px !important; height: 40px !important; max-width: 40px !important; max-height: 40px !important; object-fit: contain; flex-shrink: 0;">
+        <div class="brand-title">
+          <h1>
+            Credit Card Market Intelligence
+            <span class="tag-badge">BOD Suite</span>
+          </h1>
+          <p>Hệ thống phân tích nhu cầu thẻ tín dụng & Báo cáo điều hành Realtime</p>
+        </div>
+      </div>
+      
+      <div class="header-controls">
+        <div class="realtime-indicator" id="realtimeStatus">
+          <span class="pulse-dot"></span>
+          <span>Supabase Live Sync</span>
+        </div>
+
+        <button id="btnImport" class="btn-refresh btn-import-style" style="background: var(--accent-blue-bg); color: var(--accent-blue); border: 1px solid var(--accent-blue-border); font-weight: 500;">
+          <i data-lucide="upload" style="width: 13px; height: 13px;"></i>
+          <span>Nhập dữ liệu</span>
+        </button>
+
+        <button id="btnRefresh" class="btn-refresh">
+          <i data-lucide="rotate-cw" style="width: 13px; height: 13px;"></i>
+          <span>Làm mới</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- 4 Compact KPI Metric Cards -->
+    <section class="dashboard-grid">
+      
+      <!-- KPI 1 -->
+      <div class="kpi-card col-span-3">
+        <div class="kpi-header">
+          <span class="kpi-title">Tổng Phản Hồi Tiếp Nhận</span>
+          <span class="kpi-badge trend-up">
+            <i data-lucide="arrow-up-right" style="width: 12px; height: 12px;"></i>
+            <span>+18.4%</span>
+          </span>
+        </div>
+        <div class="kpi-value-container">
+          <span class="kpi-number" id="metricTotalComments">0</span>
+          <div class="sparkline-wrapper">
+            <canvas id="sparklineTotal"></canvas>
+          </div>
+        </div>
+        <div class="kpi-footer">Thu thập từ TikTok, Zalo & Facebook</div>
+      </div>
+
+      <!-- KPI 2 -->
+      <div class="kpi-card col-span-3">
+        <div class="kpi-header">
+          <span class="kpi-title">Kênh TikTok</span>
+          <span class="kpi-badge trend-up">
+            <i data-lucide="arrow-up-right" style="width: 12px; height: 12px;"></i>
+            <span>+28.5%</span>
+          </span>
+        </div>
+        <div class="kpi-value-container">
+          <span class="kpi-number" id="metricTiktok">0</span>
+          <div class="sparkline-wrapper">
+            <canvas id="sparklineTiktok"></canvas>
+          </div>
+        </div>
+        <div class="kpi-footer">Kênh @baothetindung.abf</div>
+      </div>
+
+      <!-- KPI 3 -->
+      <div class="kpi-card col-span-3">
+        <div class="kpi-header">
+          <span class="kpi-title">Nhóm Zalo Tư Vấn</span>
+          <span class="kpi-badge trend-up">
+            <i data-lucide="arrow-up-right" style="width: 12px; height: 12px;"></i>
+            <span>+15.2%</span>
+          </span>
+        </div>
+        <div class="kpi-value-container">
+          <span class="kpi-number" id="metricZalo">0</span>
+          <div class="sparkline-wrapper">
+            <canvas id="sparklineZalo"></canvas>
+          </div>
+        </div>
+        <div class="kpi-footer">Nhóm Bào Thẻ & Cardfind Thẻ Tín Dụng</div>
+      </div>
+
+      <!-- KPI 4 -->
+      <div class="kpi-card col-span-3">
+        <div class="kpi-header">
+          <span class="kpi-title">Cộng Đồng Facebook</span>
+          <span class="kpi-badge trend-up">
+            <i data-lucide="arrow-up-right" style="width: 12px; height: 12px;"></i>
+            <span>+8.1%</span>
+          </span>
+        </div>
+        <div class="kpi-value-container">
+          <span class="kpi-number" id="metricFacebook">0</span>
+          <div class="sparkline-wrapper">
+            <canvas id="sparklineFacebook"></canvas>
+          </div>
+        </div>
+        <div class="kpi-footer">Hội nhóm tài chính & ngân hàng</div>
+      </div>
+
+    </section>
+
+    <!-- Main Analytics Charts Section -->
+    <section class="dashboard-grid">
+      
+      <!-- Chart 1: Lĩnh vực chi tiêu -->
+      <div class="card-section col-span-8">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">1. Phân Bổ Nhu Cầu Chi Tiêu Thẻ Tín Dụng</h2>
+            <p class="section-subtitle">Tỷ lệ nhu cầu mở thẻ theo lĩnh vực chi tiêu thực tế của khách hàng</p>
+          </div>
+        </div>
+        <div class="chart-container" style="height: 275px;">
+          <canvas id="chartSpendingCategory"></canvas>
+        </div>
+      </div>
+
+      <!-- Chart 2: Top Ngân Hàng Được Đề Cập -->
+      <div class="card-section col-span-4">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">2. Top Ngân Hàng Được Đề Cập</h2>
+            <p class="section-subtitle">Tỷ lệ thương hiệu Ngân hàng được hỏi nhiều nhất</p>
+          </div>
+        </div>
+        <div class="chart-container" style="height: 150px;">
+          <canvas id="chartTopBanks"></canvas>
+        </div>
+        <div id="chartTopBanksLegend" class="bank-legend-grid"></div>
+      </div>
+
+    </section>
+
+    <!-- 🎯 SECTION 3: ĐỀ XUẤT CHIẾN LƯỢC & ĐỊNH HƯỚNG KINH DOANH CHO BAN GIÁM ĐỐC -->
+    <section class="card-section col-span-12 strategic-section" style="margin-top: 8px; margin-bottom: 24px;">
+      <div class="section-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 16px;">
+        <div>
+          <h2 class="section-title" style="font-size: 15px;">3. Đề Xuất Chiến Lược & Định Hướng Kinh Doanh (Ban Giám Đốc ABF)</h2>
+          <p class="section-subtitle">Bản khuyến nghị hành động thực tiễn & định hướng kinh doanh được AI tổng hợp từ nhu cầu thực tế của khách hàng</p>
+        </div>
+        <span class="badge" style="background: var(--accent-blue-bg); color: var(--accent-blue); border: 1px solid var(--accent-blue-border); font-weight: 600;">Executive Advisory</span>
+      </div>
+
+      <!-- 3 Khối Chiến Lược Trọng Tâm -->
+      <div class="strategic-grid">
+        
+        <!-- Khối 1: Sản phẩm chủ lực -->
+        <div class="pillar-box">
+          <div class="pillar-top">
+            <span class="pillar-title">1. Sản Phẩm Thẻ Chủ Lực</span>
+            <span class="pillar-tag green">Nhu cầu cao nhất</span>
+          </div>
+          <p id="adviseProductPush" class="pillar-desc">
+            Đẩy mạnh liên kết các dòng thẻ <strong>Hoàn tiền Mua sắm Online & Du lịch</strong> (VIB Max Card, VPBank StepUp, HSBC Live+). Lượng khách hàng hỏi về hoàn tiền học phí và mua sắm chiếm tỷ trọng lớn nhất tuần này.
+          </p>
+        </div>
+
+        <!-- Khối 2: Chiến dịch Marketing & Tiếp cận -->
+        <div class="pillar-box">
+          <div class="pillar-top">
+            <span class="pillar-title">2. Chiến Dịch Tiếp Cận Mới</span>
+            <span class="pillar-tag blue">Cơ hội tăng trưởng</span>
+          </div>
+          <p id="adviseMarketing" class="pillar-desc">
+            Tập trung sản xuất nội dung hướng dẫn <strong>thanh toán học phí qua thẻ để tối ưu hoàn tiền</strong> và phân khúc <strong>khách du lịch nước ngoài miễn phí đổi ngoại tệ</strong> (thẻ VIB Travel Élite / Techcombank Spark).
+          </p>
+        </div>
+
+        <!-- Khối 3: Tối ưu Phễu Tư Vấn & CSKH -->
+        <div class="pillar-box">
+          <div class="pillar-top">
+            <span class="pillar-title">3. Hành Động Đội Ngũ Sales</span>
+            <span class="pillar-tag amber">Chốt sales nhanh</span>
+          </div>
+          <p id="adviseSalesAction" class="pillar-desc">
+            Chỉ đạo đội ngũ Sales chủ động nhắn tin tư vấn trực tiếp trong <strong>15 phút</strong> cho nhóm khách hàng hỏi <strong>Sang ngang thẻ</strong> và <strong>Chuyển đổi trả góp 0%</strong> trên nhóm Zalo & TikTok để nâng cao tỷ lệ chốt thẻ.
+          </p>
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- Dense Data Table: Query động dữ liệu DB vào các ô lọc -->
+    <section class="card-section col-span-12">
+      
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">4. Chi Tiết Dữ Liệu Comment & Insights Trích Xuất AI</h2>
+          <p class="section-subtitle">Dữ liệu thô cào realtime từ TikTok/FB/Zalo kèm kết quả phân loại từ Gemini LLM</p>
+        </div>
+        <span class="badge badge-processed" id="tableRecordCount">0 bản ghi</span>
+      </div>
+
+      <!-- Thanh Bộ Lọc Động Đã Được Query Trực Tiếp Từ Supabase DB -->
+      <div class="filter-bar-grid">
+        <!-- Từ khóa -->
+        <div class="search-input-wrapper">
+          <i data-lucide="search" class="search-icon" style="width: 14px; height: 14px;"></i>
+          <input type="text" id="searchInput" class="input-search" placeholder="Tìm kiếm tác giả, nội dung comment...">
+        </div>
+        
+        <!-- Nền tảng (Query động từ DB) -->
+        <div>
+          <select id="platformFilter" class="input-select" style="width: 100%;">
+            <option value="all">Tất cả Nền tảng</option>
+          </select>
+        </div>
+
+        <!-- Nhóm Zalo / Kênh (Query động từ DB) -->
+        <div>
+          <select id="groupFilter" class="input-select" style="width: 100%;">
+            <option value="all">Tất cả Nhóm & Kênh</option>
+          </select>
+        </div>
+
+        <!-- Lĩnh vực chi tiêu (Query động từ DB) -->
+        <div>
+          <select id="categoryFilter" class="input-select" style="width: 100%;">
+            <option value="all">Tất cả Lĩnh Vực Chi Tiêu</option>
+          </select>
+        </div>
+
+        <!-- Ngân hàng / Dòng thẻ (Query động từ DB) -->
+        <div>
+          <select id="bankFilter" class="input-select" style="width: 100%;">
+            <option value="all">Tất cả Ngân Hàng</option>
+          </select>
+        </div>
+
+        <!-- Trạng thái AI (Query động từ DB) -->
+        <div>
+          <select id="statusFilter" class="input-select" style="width: 100%;">
+            <option value="all">Tất cả Trạng Thái AI</option>
+          </select>
+        </div>
+
+        <!-- Phân trang 10 / 15 cmt trên 1 trang -->
+        <div>
+          <select id="pageSizeSelect" class="input-select" style="width: 100%;">
+            <option value="10" selected>Hiển thị 10 cmt / trang</option>
+            <option value="15">Hiển thị 15 cmt / trang</option>
+            <option value="25">Hiển thị 25 cmt / trang</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="dense-table">
+          <thead>
+            <tr>
+              <th id="thId">ID ↕</th>
+              <th id="thPlatform">Nền Tảng</th>
+              <th id="thGroup">Kênh / Nhóm</th>
+              <th id="thAuthor">Tác Giả</th>
+              <th id="thContent">Nội Dung Comment / Tin Nhắn</th>
+              <th id="thCategory">Lĩnh Vực Chi Tiêu</th>
+              <th id="thBank">Ngân Hàng / Dòng Thẻ</th>
+              <th id="thStatus">Trạng Thái AI</th>
+              <th id="thDate">Thời Gian</th>
+              <th id="thAction">Hành Động</th>
+            </tr>
+          </thead>
+          <tbody id="commentsTableBody">
+            <!-- Rows dynamically loaded with priority sorting -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Phân Trang (Pagination) -->
+      <div class="table-footer">
+        <span id="paginationInfo">Hiển thị 0 - 0 trong tổng số 0 bản ghi</span>
+        
+        <div class="pagination-controls">
+          <button class="btn-refresh" id="btnPrevPage" disabled>Trang trước</button>
+          <span class="page-indicator" id="pageIndicator">Trang 1 / 1</span>
+          <button class="btn-refresh" id="btnNextPage" disabled>Trang sau</button>
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <!-- Modal Xem Bình Luận & Mở Đúng Link Bài Đăng Gốc -->
+  <div class="modal-backdrop" id="commentModalBackdrop">
+    <div class="modal-container">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="modalAuthor">Nguyễn Văn A</div>
+          <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+            <span class="badge badge-tiktok" id="modalPlatformBadge">TikTok</span>
+            <span id="modalGroupBadge" style="font-size: 11.5px; color: var(--text-muted); font-weight: 500;"></span>
+          </div>
+        </div>
+        <button class="modal-close-btn" id="modalCloseBtn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div style="margin-bottom: 14px;">
+          <div class="modal-info-label">Nội dung comment / tin nhắn:</div>
+          <div class="modal-content-box" id="modalContent">Nội dung comment chi tiết...</div>
+        </div>
+
+        <div class="modal-grid-2">
+          <div>
+            <div class="modal-info-label">Lĩnh vực chi tiêu (AI):</div>
+            <div id="modalCategory" style="font-weight: 700; color: var(--text-primary);">Du Lịch / Vé Máy Bay</div>
+          </div>
+          <div>
+            <div class="modal-info-label">Ngân hàng & Dòng thẻ:</div>
+            <div id="modalBankCard" style="font-weight: 700; color: var(--text-primary);">VIB (Travel Élite)</div>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <div class="modal-info-label">💡 Tóm tắt nhu cầu khách hàng (AI):</div>
+          <div class="modal-content-box" id="modalSummary" style="background: var(--accent-green-bg); border-color: var(--accent-green-border); color: var(--accent-green); font-weight: 600;">-</div>
+        </div>
+
+        <div>
+          <div class="modal-info-label">🎯 Định hướng hành động cho Ban Giám Đốc:</div>
+          <div class="modal-content-box" id="modalDirectorAction" style="background: var(--accent-blue-bg); border-color: var(--accent-blue-border); color: var(--accent-blue); font-weight: 600;">-</div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-refresh" id="modalCancelBtn">Đóng</button>
+        <button class="btn-open-link" id="modalOpenLinkBtn">
+          <i data-lucide="external-link" style="width: 13px; height: 13px;"></i>
+          <span>Mở Đúng Đến Bài Đăng Gốc</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Nhập Dữ Liệu Raw Comments -->
+  <div class="modal-backdrop" id="importModalBackdrop">
+    <div class="modal-container" style="max-width: 500px;">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Nhập Dữ Liệu Khách Hàng (Raw Comments)</div>
+          <div style="font-size: 11.5px; color: var(--text-muted); font-weight: 500; margin-top: 4px;">
+            Nhập file CSV hoặc JSON để đẩy trực tiếp vào bảng raw_comments
+          </div>
+        </div>
+        <button class="modal-close-btn" id="importModalCloseBtn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Drag and Drop Zone -->
+        <div class="import-dropzone" id="importDropzone" style="border: 2px dashed var(--border-subtle); border-radius: 8px; padding: 30px 20px; text-align: center; background: rgba(0,0,0,0.01); cursor: pointer; transition: all 0.2s ease;">
+          <i data-lucide="upload-cloud" style="width: 32px; height: 32px; color: var(--text-muted); margin-bottom: 8px; margin-left: auto; margin-right: auto;"></i>
+          <p style="font-weight: 600; margin: 4px 0; font-size: 13.5px; color: var(--text-primary);">Kéo thả file vào đây hoặc <span style="color: var(--accent-blue); text-decoration: underline;">chọn file</span></p>
+          <p style="font-size: 11px; color: var(--text-muted); margin-top: 4px; margin-bottom: 0;">Hỗ trợ định dạng .csv hoặc .json (Tối đa 5MB)</p>
+          <input type="file" id="fileInput" accept=".csv,.json" style="display: none;">
+        </div>
+
+        <!-- File preview & status -->
+        <div class="import-preview-box" id="importPreviewBox" style="display: none; margin-top: 14px; border: 1px solid var(--border-subtle); padding: 12px; border-radius: 6px; background: rgba(0,0,0,0.01);">
+          <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-subtle); padding-bottom: 8px; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px; max-width: 80%;">
+              <i data-lucide="file-text" style="width: 16px; height: 16px; color: var(--accent-blue); flex-shrink: 0;"></i>
+              <span id="importFileName" style="font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">file.csv</span>
+              <span id="importFileSize" style="font-size: 11px; color: var(--text-muted); flex-shrink: 0;">0 KB</span>
+            </div>
+            <button id="btnRemoveFile" style="background: none; border: none; color: var(--accent-red); cursor: pointer; font-size: 12px; font-weight: 600;">Xóa</button>
+          </div>
+          <div id="importFileStatus" style="font-size: 11.5px; font-weight: 500; margin-bottom: 8px; color: var(--text-secondary);">Sẵn sàng nhập dữ liệu...</div>
+          
+          <!-- Progress bar -->
+          <div class="progress-bar-container" style="background: var(--border-subtle); height: 6px; border-radius: 3px; overflow: hidden;">
+            <div id="importProgressBar" style="width: 0%; height: 100%; background: var(--accent-blue); transition: width 0.1s ease;"></div>
+          </div>
+        </div>
+        
+        <!-- Note instructions -->
+        <div class="import-instructions" style="background: var(--accent-blue-bg); border: 1px solid var(--accent-blue-border); color: var(--accent-blue); padding: 10px; border-radius: 6px; font-size: 11.5px; margin-top: 14px; line-height: 1.4;">
+          <strong style="display: block; margin-bottom: 4px;">💡 Hướng dẫn định dạng file:</strong>
+          • <strong>CSV</strong>: Cần có cột tiêu đề bắt buộc: <code>content</code> (nội dung) và <code>platform</code> (zalo, tiktok hoặc facebook). Cột tự chọn: <code>author</code>, <code>group_or_page</code>, <code>comment_created_at</code>.<br>
+          • <strong>JSON</strong>: Cấu trúc mảng đối tượng: <code>[ { "content": "...", "platform": "..." } ]</code>.
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-refresh" id="importModalCancelBtn">Hủy</button>
+        <button class="btn-open-link" id="btnStartImport" disabled style="background: var(--border-subtle); color: var(--text-muted); border: 1px solid var(--border-subtle); opacity: 0.6; cursor: not-allowed; display: flex; align-items: center; gap: 6px; font-weight: 600;">
+          <i data-lucide="play" style="width: 13px; height: 13px;"></i>
+          <span>Bắt đầu nhập</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

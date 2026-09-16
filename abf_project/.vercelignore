@@ -1,0 +1,12 @@
+__pycache__
+zalo_browser_profile
+zao
+.env
+*.bat
+*.docx
+*.py
+requirements.txt
+schema.sql
+n8n_workflows
+taste_skill_lib
+

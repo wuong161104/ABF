@@ -1,0 +1,75 @@
+{
+  "name": "ABF - TikTok Crawl via Execute Command",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger (T2 Hàng Tuần)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "python c:/Users/vuong/Downloads/ABF/abf_project/crawl_tiktok_n8n.py --target \"Bào Thẻ thông minh\" --limit 30"
+      },
+      "id": "execute-command-python",
+      "name": "Execute Command (Run Python Scraper)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse JSON Output từ Python script STDOUT\nconst stdout = $input.item.json.stdout;\nconst data = JSON.parse(stdout);\nreturn [{ json: data }];"
+      },
+      "id": "parse-json-node",
+      "name": "Code Node (Parse STDOUT JSON)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (T2 Hàng Tuần)": {
+      "main": [
+        [
+          {
+            "node": "Execute Command (Run Python Scraper)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Command (Run Python Scraper)": {
+      "main": [
+        [
+          {
+            "node": "Code Node (Parse STDOUT JSON)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

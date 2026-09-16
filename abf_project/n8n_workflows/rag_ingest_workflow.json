@@ -1,0 +1,170 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "chunkSize": 600,
+        "chunkOverlap": 100,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        848,
+        2080
+      ],
+      "id": "d72b8d33-7cdd-428a-abf4-634d92d89e8e",
+      "name": "Cắt nhỏ văn bản (Text Splitter)"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-embedding-001"
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        336,
+        2032
+      ],
+      "id": "88e11619-e287-4ea1-b907-9235e0a605bf",
+      "name": "Embeddings Google Gemini1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Q62Aqg1EloyvcHzF",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1,
+      "position": [
+        688,
+        1936
+      ],
+      "id": "c4e5d4e3-3951-4cb9-8ccc-31b9608925a6",
+      "name": "Default Data Loader"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": {
+          "__rl": true,
+          "value": "documents",
+          "mode": "list",
+          "cachedResultName": "documents"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1,
+      "position": [
+        416,
+        1744
+      ],
+      "id": "b44d2643-3a88-4209-9f90-63bf8f5538e1",
+      "name": "Lưu vào Supabase Vector Store",
+      "credentials": {
+        "supabaseApi": {
+          "id": "Tz4bfXzQGmBJYouj",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "c:\\Users\\vuong\\Downloads\\VIB_Max_Card_Policy.txt",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFilesFromDisk",
+      "typeVersion": 1,
+      "position": [
+        112,
+        1744
+      ],
+      "id": "read_file_from_disk",
+      "name": "Đọc file từ đĩa"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -160,
+        1744
+      ],
+      "id": "961f6669-5ddb-40d2-b0ed-ae6ce462c7bc",
+      "name": "Bấm để nạp dữ liệu"
+    }
+  ],
+  "connections": {
+    "Cắt nhỏ văn bản (Text Splitter)": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini1": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Lưu vào Supabase Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Lưu vào Supabase Vector Store",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Đọc file từ đĩa": {
+      "main": [
+        [
+          {
+            "node": "Lưu vào Supabase Vector Store",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Default Data Loader",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bấm để nạp dữ liệu": {
+      "main": [
+        [
+          {
+            "node": "Đọc file từ đĩa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b6261f3fbfc4b59b359c13eb282a609a46db8124fe505f079cc12309bfe952d7"
+  }
+}

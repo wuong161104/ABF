@@ -1,0 +1,24 @@
+# Environment Variables & Secrets
+.env
+*.env
+abf_project/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+crawler_bg.log
+crawler_err.log
+
+# Browser profile & cache
+zalo_browser_profile/
+.playwright/
+
+# Large crawled data (download via artifact or Supabase)
+abf_project/crawled_data/
+
+# Vercel & IDE
+.vercel/
+.gemini/
+.env.local
