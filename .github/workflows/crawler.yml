@@ -18,6 +18,11 @@ on:
         required: true
         default: true
         type: boolean
+      force_recrawl:
+        description: 'Bỏ qua Resume, cào lại từ đầu (Mặc định False)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   crawl:
@@ -60,7 +65,11 @@ jobs:
           if [ "${{ github.event.inputs.save_to_supabase }}" = "false" ]; then
             SUPABASE_FLAG="--no-supabase"
           fi
-          python deep_web_crawler.py --url "${{ github.event.inputs.target_url }}" --max-subpages "${{ github.event.inputs.max_pages }}" --headless $SUPABASE_FLAG
+          FORCE_FLAG=""
+          if [ "${{ github.event.inputs.force_recrawl }}" = "true" ]; then
+            FORCE_FLAG="--force-recrawl"
+          fi
+          python deep_web_crawler.py --url "${{ github.event.inputs.target_url }}" --max-subpages "${{ github.event.inputs.max_pages }}" --headless $SUPABASE_FLAG $FORCE_FLAG
 
       - name: 💾 Nén & Đóng gói Dữ liệu Cào được (Tải về máy tính)
         if: always()

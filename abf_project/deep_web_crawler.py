@@ -72,11 +72,11 @@ DOC_EXTENSIONS = ('.pdf', '.docx', '.doc', '.docm', '.xlsx', '.xls', '.pptx', '.
 # Supabase Credentials
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://azpvcqpnecljsosamnot.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-POOLER_HOST = os.getenv("POOLER_HOST", "aws-0-ap-northeast-2.pooler.supabase.com")
-POOLER_USER = os.getenv("POOLER_USER", "postgres.azpvcqpnecljsosamnot")
-POOLER_PORT = int(os.getenv("POOLER_PORT", "6543"))
-PASSWORD = os.getenv("SUPABASE_DB_PASSWORD", "thanhvuong16@")
-DBNAME = os.getenv("DBNAME", "postgres")
+POOLER_HOST = os.getenv("POOLER_HOST") or os.getenv("DB_HOST", "aws-0-ap-northeast-2.pooler.supabase.com")
+POOLER_USER = os.getenv("POOLER_USER") or os.getenv("DB_USER", "postgres.azpvcqpnecljsosamnot")
+POOLER_PORT = int(os.getenv("POOLER_PORT") or os.getenv("DB_PORT", "6543"))
+PASSWORD = os.getenv("SUPABASE_DB_PASSWORD") or os.getenv("DB_PASSWORD", "thanhvuong16@")
+DBNAME = os.getenv("DBNAME") or os.getenv("DB_NAME", "postgres")
 
 # External Social Media & Noise Domains to Exclude
 EXCLUDED_EXTERNAL_DOMAINS = [
@@ -108,13 +108,15 @@ class DeepWebCrawler:
         output_dir: str = "crawled_data",
         headless: bool = False,
         max_subpages: int = 50,
-        save_to_supabase: bool = True
+        save_to_supabase: bool = True,
+        force_recrawl: bool = False
     ):
         self.base_url = base_url.strip()
         self.output_dir = output_dir
         self.headless = headless
         self.max_subpages = max_subpages  # 0 or negative means unlimited/crawl all
         self.save_to_supabase = save_to_supabase
+        self.force_recrawl = force_recrawl
         
         parsed = urlparse(self.base_url)
         self.base_domain = parsed.netloc.lower().replace("www.", "")
@@ -144,6 +146,73 @@ class DeepWebCrawler:
         self.registry_path = os.path.join(self.domain_dir, "content_registry.json")
         self.content_registry = self._load_content_registry()
         self._init_summary_csv()
+        self.already_crawled_urls = set() if self.force_recrawl else self._load_already_crawled_urls()
+
+    def _load_already_crawled_urls(self) -> Set[str]:
+        """
+        Nạp toàn bộ URL đã cào thành công từ:
+        1. Cơ sở dữ liệu Supabase (Table: public.crawled_web_data)
+        2. Bảng summary.csv cục bộ
+        3. content_registry.json
+        Giúp tính năng Resume (cào tiếp phần dang dở) hoạt động thông minh trên cả máy tính lẫn GitHub Actions!
+        """
+        crawled_set: Set[str] = set()
+
+        def _add_url(u: str):
+            if not u:
+                return
+            clean_u = u.strip()
+            if not clean_u.startswith("http"):
+                return
+            crawled_set.add(clean_u)
+            crawled_set.add(clean_u.rstrip('/'))
+            crawled_set.add(clean_u.rstrip('/') + '/')
+
+        # 1. Nạp từ Supabase DB
+        if self.save_to_supabase:
+            try:
+                import psycopg2
+                conn = psycopg2.connect(
+                    host=POOLER_HOST, port=POOLER_PORT, user=POOLER_USER,
+                    password=PASSWORD, dbname=DBNAME, connect_timeout=8
+                )
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT DISTINCT source_url FROM public.crawled_web_data WHERE source_url LIKE %s",
+                    (f"%{self.base_domain}%",)
+                )
+                rows = cur.fetchall()
+                for r in rows:
+                    if r and r[0]:
+                        _add_url(r[0])
+                cur.close()
+                conn.close()
+            except Exception as e:
+                self.log(f"Không thể nạp lịch sử URL từ Supabase: {e}", "WARNING")
+
+        # 2. Nạp từ summary.csv cục bộ (nếu có)
+        if os.path.exists(self.summary_csv_path):
+            try:
+                with open(self.summary_csv_path, "r", encoding="utf-8-sig", errors="ignore") as f:
+                    reader = csv.reader(f)
+                    next(reader, None)
+                    for row in reader:
+                        if len(row) > 3 and row[3]:
+                            _add_url(row[3])
+            except Exception:
+                pass
+
+        # 3. Nạp từ content_registry.json
+        if hasattr(self, "content_registry"):
+            for k in self.content_registry.keys():
+                if k.startswith("http"):
+                    _add_url(k)
+
+        distinct_count = len(crawled_set) // 3 if crawled_set else 0
+        if distinct_count > 0:
+            self.log(f"⚡ [RESUME CRAWLER] Đã tải trước {distinct_count} URL đã cào thành công từ trước. Hệ thống sẽ tự động BỎ QUA các link này để cào tiếp các link còn lại!", "SUCCESS")
+
+        return crawled_set
 
     def _load_content_registry(self) -> Dict[str, Any]:
         """Tải cơ sở dữ liệu hash nội dung từ content_registry.json để kiểm tra trùng lặp"""
@@ -1464,6 +1533,35 @@ class DeepWebCrawler:
                 # =========================================================================
                 targets_to_scrape = self.discover_all_site_links(context)
                 
+                # ---------------------------------------------------------
+                # CƠ CHẾ RESUME THÔNG MINH (CHỐNG CÀO LẠI, TIẾP TỤC CÀO LINK DANG DỞ)
+                # ---------------------------------------------------------
+                all_discovered_count = len(targets_to_scrape)
+                pending_targets = []
+                skipped_crawled_count = 0
+
+                for item in targets_to_scrape:
+                    u = item["url"].strip()
+                    if not self.force_recrawl and (
+                        u in self.already_crawled_urls or 
+                        u.rstrip('/') in self.already_crawled_urls or 
+                        (u.rstrip('/') + '/') in self.already_crawled_urls
+                    ):
+                        skipped_crawled_count += 1
+                    else:
+                        pending_targets.append(item)
+
+                self.log(
+                    f"🎯 [BỘ LỌC RESUME] Phát hiện {all_discovered_count} URL trên toàn site | "
+                    f"ĐÃ CÀO TỪ TRƯỚC: {skipped_crawled_count} URL | "
+                    f"CÒN LẠI CẦN CÀO TIẾP: {len(pending_targets)} URL!",
+                    "SUCCESS"
+                )
+
+                if not pending_targets:
+                    self.log("🎉 TOÀN BỘ CÁC URL TRÊN WEBSITE ĐÃ ĐƯỢC CÀO HOÀN TẤT TRƯỚC ĐÓ! Không có link mới nào cần cào.", "SUCCESS")
+
+                targets_to_scrape = pending_targets
                 total_initial = len(targets_to_scrape)
                 display_target = self.max_subpages if (self.max_subpages > 0 and self.max_subpages < total_initial) else total_initial
                 self.log(f"Bắt đầu Phase 2: Bóc tách nội dung & thẻ Heading h1-h6 (Mục tiêu: {display_target} trang/tài liệu)...", "PROGRESS")
@@ -1744,6 +1842,9 @@ class DeepWebCrawler:
 
                                 # 1. Nếu là tệp tài liệu (PDF, Word, Excel...)
                                 if self._is_doc_url(full_link_url) and full_link_url not in processed_doc_urls:
+                                    clean_doc_u = full_link_url.strip()
+                                    if not self.force_recrawl and (clean_doc_u in self.already_crawled_urls or clean_doc_u.rstrip('/') in self.already_crawled_urls):
+                                        continue
                                     processed_doc_urls.add(full_link_url)
                                     doc_title = (a_tag.inner_text() or "").strip() or os.path.basename(urlparse(full_link_url).path)
                                     doc_type = self._classify_url_type(full_link_url)
@@ -1752,6 +1853,9 @@ class DeepWebCrawler:
                                 # 2. Khám phá liên tục link nội bộ mới đưa vào hàng đợi cào tiếp
                                 elif self._is_valid_internal_url(full_link_url) and full_link_url not in self.seen_urls:
                                     self.seen_urls.add(full_link_url)
+                                    clean_link_u = full_link_url.strip()
+                                    if not self.force_recrawl and (clean_link_u in self.already_crawled_urls or clean_link_u.rstrip('/') in self.already_crawled_urls):
+                                        continue
                                     link_title = (a_tag.inner_text() or "").strip()
                                     if self.max_subpages == 0 or len(targets_to_scrape) < self.max_subpages * 4:
                                         targets_to_scrape.append({
@@ -2215,6 +2319,7 @@ def main():
     parser.add_argument("--max-subpages", type=int, default=50, help="Max subpages/articles to scrape (0 for unlimited)")
     parser.add_argument("--headless", action="store_true", default=False, help="Run browser in headless mode")
     parser.add_argument("--no-supabase", action="store_true", default=False, help="Disable saving to Supabase")
+    parser.add_argument("--force-recrawl", action="store_true", default=False, help="Force re-crawling even if URL exists in DB")
     args = parser.parse_args()
 
     crawler = DeepWebCrawler(
@@ -2222,7 +2327,8 @@ def main():
         output_dir=args.output_dir,
         headless=args.headless,
         max_subpages=args.max_subpages,
-        save_to_supabase=not args.no_supabase
+        save_to_supabase=not args.no_supabase,
+        force_recrawl=args.force_recrawl
     )
     crawler.run()
 
