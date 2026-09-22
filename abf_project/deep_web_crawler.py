@@ -26,8 +26,9 @@ import csv
 import io
 import argparse
 import hashlib
+import random
 from urllib.parse import urljoin, urlparse, urldefrag
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Set, Tuple
 from bs4 import BeautifulSoup, NavigableString, Tag
 import requests
@@ -79,14 +80,17 @@ def disable_anti_sleep():
 # Danh sách phần mở rộng tệp tài liệu được hỗ trợ cào và bóc tách
 DOC_EXTENSIONS = ('.pdf', '.docx', '.doc', '.docm', '.xlsx', '.xls', '.pptx', '.ppt', '.txt', '.csv')
 
-# Supabase Credentials
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://azpvcqpnecljsosamnot.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-POOLER_HOST = os.getenv("POOLER_HOST") or os.getenv("DB_HOST", "aws-0-ap-northeast-2.pooler.supabase.com")
-POOLER_USER = os.getenv("POOLER_USER") or os.getenv("DB_USER", "postgres.azpvcqpnecljsosamnot")
-POOLER_PORT = int(os.getenv("POOLER_PORT") or os.getenv("DB_PORT", "6543"))
-PASSWORD = os.getenv("SUPABASE_DB_PASSWORD") or os.getenv("DB_PASSWORD", "thanhvuong16@")
-DBNAME = os.getenv("DBNAME") or os.getenv("DB_NAME", "postgres")
+# Supabase Credentials (Tự động loại bỏ khoảng trắng, xuống dòng \r\n gây lỗi Header HTTP)
+SUPABASE_URL = re.sub(r'[\r\n\t ]+', '', os.getenv("SUPABASE_URL") or "https://azpvcqpnecljsosamnot.supabase.co").rstrip('/')
+SUPABASE_KEY = re.sub(r'[\r\n\t ]+', '', os.getenv("SUPABASE_KEY") or "")
+POOLER_HOST = (os.getenv("POOLER_HOST") or os.getenv("DB_HOST", "aws-0-ap-northeast-2.pooler.supabase.com")).strip()
+POOLER_USER = (os.getenv("POOLER_USER") or os.getenv("DB_USER", "postgres.azpvcqpnecljsosamnot")).strip()
+try:
+    POOLER_PORT = int((os.getenv("POOLER_PORT") or os.getenv("DB_PORT", "6543")).strip())
+except Exception:
+    POOLER_PORT = 6543
+PASSWORD = (os.getenv("SUPABASE_DB_PASSWORD") or os.getenv("DB_PASSWORD", "thanhvuong16@")).strip()
+DBNAME = (os.getenv("DBNAME") or os.getenv("DB_NAME", "postgres")).strip()
 
 # External Social Media & Noise Domains to Exclude
 EXCLUDED_EXTERNAL_DOMAINS = [
@@ -1836,10 +1840,12 @@ class DeepWebCrawler:
 
         # Method 2: REST API Fallback
         try:
-            rest_url = f"{SUPABASE_URL}/rest/v1/crawled_web_data"
+            clean_key = re.sub(r'[\r\n\t ]+', '', SUPABASE_KEY)
+            clean_url = re.sub(r'[\r\n\t ]+', '', SUPABASE_URL).rstrip('/')
+            rest_url = f"{clean_url}/rest/v1/crawled_web_data"
             headers = {
-                "apikey": SUPABASE_KEY,
-                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "apikey": clean_key,
+                "Authorization": f"Bearer {clean_key}",
                 "Content-Type": "application/json",
                 "Prefer": "return=representation"
             }
