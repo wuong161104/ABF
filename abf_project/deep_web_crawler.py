@@ -234,6 +234,22 @@ class DeepWebCrawler:
         self.storage_manager = StorageManager()
         self.already_crawled_urls = set() if self.force_recrawl else self._load_already_crawled_urls()
 
+        # Khởi tạo HTTP Session dự phòng với đầy đủ Browser Headers để bypass Cloudflare WAF/Anti-Bot
+        self.http_session = requests.Session()
+        self.http_session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1"
+        })
+
     def _load_already_crawled_urls(self) -> Set[str]:
         """
         Nạp toàn bộ URL đã cào thành công từ:
@@ -1284,6 +1300,50 @@ class DeepWebCrawler:
                 })
         return images
 
+    def extract_images_from_html(self, html_content: str, current_url: str) -> List[Dict[str, str]]:
+        """
+        Trích xuất danh sách hình ảnh từ nội dung HTML thuần khi chạy chế độ HTTP Fallback.
+        """
+        images = []
+        seen = set()
+        soup = BeautifulSoup(html_content, "html.parser")
+        for img in soup.find_all("img"):
+            src = img.get("src") or img.get("data-src") or img.get("data-lazy") or ""
+            alt = (img.get("alt") or "").strip()
+            title = (img.get("title") or "").strip()
+            full_url = self._normalize_url(src, current_url)
+            if full_url and full_url not in seen and not full_url.endswith('.svg'):
+                seen.add(full_url)
+                images.append({
+                    "url": full_url,
+                    "alt": alt,
+                    "title": title
+                })
+        return images
+
+    def fetch_page_fallback(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Cơ chế cứu cánh khi Playwright bị chặn bởi Cloudflare/WAF (HTTP 403, 503...) trên Cloud/GitHub Actions.
+        Sử dụng Requests Session với đầy đủ Browser Headers giả lập chuẩn.
+        """
+        try:
+            resp = self.http_session.get(url, timeout=30, allow_redirects=True)
+            if resp.status_code == 200 and resp.text:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                title = ""
+                if soup.title and soup.title.string:
+                    title = soup.title.string.strip()
+                elif soup.find("h1"):
+                    title = soup.find("h1").get_text(strip=True)
+                return {
+                    "status_code": 200,
+                    "html": resp.text,
+                    "title": title or self._title_from_url(url)
+                }
+            return {"status_code": resp.status_code, "html": "", "title": ""}
+        except Exception as e:
+            return {"status_code": 500, "error": str(e), "html": "", "title": ""}
+
     def extract_clean_text_and_tables(self, html_content: str) -> Dict[str, Any]:
         """
         Trích xuất toàn bộ dữ liệu bài viết sang cấu trúc Markdown chuẩn,
@@ -1825,15 +1885,58 @@ class DeepWebCrawler:
         try:
             with sync_playwright() as p:
                 self.log(f"Khởi động Trình duyệt {'(Chế độ ngầm)' if self.headless else '(Mở cửa sổ Chrome)'}...", "INFO")
+                chromium_args = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-infobars",
+                    "--window-size=1920,1080",
+                    "--ignore-certificate-errors",
+                    "--ignore-certificate-errors-spki-list",
+                ]
                 try:
-                    browser = p.chromium.launch(headless=self.headless, channel="chrome")
+                    browser = p.chromium.launch(
+                        headless=self.headless, 
+                        channel="chrome", 
+                        args=chromium_args, 
+                        ignore_default_args=["--enable-automation"]
+                    )
                 except Exception:
-                    browser = p.chromium.launch(headless=self.headless)
+                    browser = p.chromium.launch(
+                        headless=self.headless, 
+                        args=chromium_args, 
+                        ignore_default_args=["--enable-automation"]
+                    )
                 context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
                     viewport={"width": 1600, "height": 1000},
-                    locale="vi-VN"
+                    locale="vi-VN",
+                    timezone_id="Asia/Ho_Chi_Minh",
+                    extra_http_headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+                        "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+                        "Sec-Ch-Ua-Mobile": "?0",
+                        "Sec-Ch-Ua-Platform": '"Windows"',
+                        "Sec-Fetch-Dest": "document",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Site": "none",
+                        "Sec-Fetch-User": "?1",
+                        "Upgrade-Insecure-Requests": "1"
+                    }
                 )
+                context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    window.chrome = {
+                        runtime: {},
+                        loadTimes: function() {},
+                        csi: function() {},
+                        app: {}
+                    };
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                    Object.defineProperty(navigator, 'languages', { get: () => ['vi-VN', 'vi', 'en-US', 'en'] });
+                """)
 
                 # =========================================================================
                 # PHASE 1: QUÉT VÉT CẠN TOÀN BỘ CÁC THẺ <a> TRÊN TOÀN BỘ WEBSITE & MENU
@@ -2108,41 +2211,88 @@ class DeepWebCrawler:
                             continue
 
                     try:
-                        sub_page = context.new_page()
-                        response = sub_page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                        time.sleep(1.5)
+                        sub_page = None
+                        is_fallback = False
+                        status_code = 200
+                        html_content = ""
+                        page_title = ""
 
-                        status_code = response.status if response else 200
+                        # 1. Thử cào qua Playwright Browser
+                        try:
+                            sub_page = context.new_page()
+                            response = sub_page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                            time.sleep(1.5)
+                            status_code = response.status if response else 200
+                        except Exception as nav_err:
+                            self.log(f"  -> Trình duyệt gặp lỗi ({nav_err}): {url}", "WARNING")
+                            status_code = 500
+
+                        # 2. Xử lý khi gặp lỗi chặn WAF/Cloudflare (HTTP 403, 503, 429...)
                         if status_code >= 400:
-                            self.log(f"  -> Lỗi HTTP {status_code}: {url}", "WARNING")
-                            sub_page.close()
-                            continue
+                            self.log(f"  -> Playwright nhận HTTP {status_code}: {url}. Tự động kích hoạt HTTP Engine dự phòng...", "WARNING")
+                            if sub_page:
+                                try:
+                                    sub_page.close()
+                                except Exception:
+                                    pass
+                                sub_page = None
 
-                        # Smooth scroll
-                        self.smooth_scroll_full_page(sub_page)
+                            # Chạy Fallback qua HTTP Session
+                            fallback_data = self.fetch_page_fallback(url)
+                            if not fallback_data or fallback_data.get("status_code", 0) >= 400:
+                                self.log(f"  -> Lỗi HTTP {status_code}: {url}", "WARNING")
+                                continue
 
-                        # Auto-click collapses/tabs/accordions
-                        accordions = sub_page.query_selector_all(".accordion, .collapse, [data-toggle='collapse'], .tab-header, .tab, [role='tab'], .faq-header, .show-more")
-                        for acc in accordions[:10]:
-                            try:
-                                acc_txt = (acc.inner_text() or "").strip()
-                                if not any(ex in acc_txt.lower() for ex in EXCLUDE_CLICK_KEYWORDS):
-                                    acc.click(timeout=500)
-                                    time.sleep(0.1)
-                            except Exception:
-                                pass
+                            html_content = fallback_data["html"]
+                            page_title = fallback_data["title"]
+                            parsed_data = self.extract_clean_text_and_tables(html_content)
+                            images = self.extract_images_from_html(html_content, url)
+                            status_code = 200
+                            is_fallback = True
+                            self.log(f"  -> ✅ Cứu cánh thành công qua HTTP Engine (Bypass 403): {len(parsed_data.get('headings', []))} đề mục, {len(parsed_data.get('tables', []))} bảng", "SUCCESS")
+                        else:
+                            # Chạy tiếp tương tác DOM bình thường trên Playwright
+                            self.smooth_scroll_full_page(sub_page)
 
-                        # Extract Structured Data
-                        html_content = sub_page.content()
-                        parsed_data = self.extract_clean_text_and_tables(html_content)
-                        images = self.extract_images_from_page(sub_page, url)
-                        page_title = sub_page.title()
+                            # Auto-click collapses/tabs/accordions
+                            accordions = sub_page.query_selector_all(".accordion, .collapse, [data-toggle='collapse'], .tab-header, .tab, [role='tab'], .faq-header, .show-more")
+                            for acc in accordions[:10]:
+                                try:
+                                    acc_txt = (acc.inner_text() or "").strip()
+                                    if not any(ex in acc_txt.lower() for ex in EXCLUDE_CLICK_KEYWORDS):
+                                        acc.click(timeout=500)
+                                        time.sleep(0.1)
+                                except Exception:
+                                    pass
+
+                            # Extract Structured Data
+                            html_content = sub_page.content()
+                            parsed_data = self.extract_clean_text_and_tables(html_content)
+                            images = self.extract_images_from_page(sub_page, url)
+                            page_title = sub_page.title()
 
                         # TỰ ĐỘNG QUÉT & TẢI XUỐNG TOÀN BỘ FILE TÀI LIỆU VÀ ĐƯỜNG LINK CON MỚI TRONG TRANG NÀY
                         attached_docs_in_page = []
-                        for a_tag in sub_page.query_selector_all("a[href]"):
+                        a_tags_data = []
+                        if not is_fallback and sub_page:
+                            for a_tag in sub_page.query_selector_all("a[href]"):
+                                try:
+                                    href = a_tag.get_attribute("href") or ""
+                                    text = (a_tag.inner_text() or "").strip()
+                                    if href:
+                                        a_tags_data.append((href, text))
+                                except Exception:
+                                    pass
+                        else:
+                            soup_links = BeautifulSoup(html_content, "html.parser")
+                            for a_tag in soup_links.find_all("a", href=True):
+                                href = a_tag.get("href") or ""
+                                text = a_tag.get_text(strip=True)
+                                if href:
+                                    a_tags_data.append((href, text))
+
+                        for href, link_text in a_tags_data:
                             try:
-                                href = a_tag.get_attribute("href") or ""
                                 full_link_url = self._normalize_url(href, url)
                                 if not full_link_url:
                                     continue
@@ -2153,7 +2303,7 @@ class DeepWebCrawler:
                                     if not self.force_recrawl and (clean_doc_u in self.already_crawled_urls or clean_doc_u.rstrip('/') in self.already_crawled_urls):
                                         continue
                                     processed_doc_urls.add(full_link_url)
-                                    doc_title = (a_tag.inner_text() or "").strip() or os.path.basename(urlparse(full_link_url).path)
+                                    doc_title = link_text or os.path.basename(urlparse(full_link_url).path)
                                     doc_type = self._classify_url_type(full_link_url)
                                     attached_docs_in_page.append({"url": full_link_url, "title": doc_title, "type": doc_type})
 
@@ -2163,11 +2313,10 @@ class DeepWebCrawler:
                                     clean_link_u = full_link_url.strip()
                                     if not self.force_recrawl and (clean_link_u in self.already_crawled_urls or clean_link_u.rstrip('/') in self.already_crawled_urls):
                                         continue
-                                    link_title = (a_tag.inner_text() or "").strip()
                                     if self.max_subpages == 0 or len(targets_to_scrape) < self.max_subpages * 4:
                                         targets_to_scrape.append({
                                             "url": full_link_url,
-                                            "title": link_title or self._title_from_url(full_link_url),
+                                            "title": link_text or self._title_from_url(full_link_url),
                                             "type": self._classify_url_type(full_link_url)
                                         })
                             except Exception:
@@ -2460,14 +2609,22 @@ class DeepWebCrawler:
                             gc.collect()
 
                         self.log(f"  -> ✅ Bóc thành công: {headings_found} thẻ H, {paragraphs_found} thẻ P, {cells_found} ô TD, {italics_found} thẻ I, {len(parsed_data['tables'])} bảng biểu, {len(images)} hình ảnh", "SUCCESS")
-                        sub_page.close()
+                        if sub_page:
+                            try:
+                                sub_page.close()
+                            except Exception:
+                                pass
+
+                        # Chống WAF Rate Limit: Nghỉ ngẫu nhiên 1 - 2.5 giây giữa các trang
+                        time.sleep(random.uniform(1.0, 2.2))
 
                     except Exception as err:
                         self.log(f"  -> Lỗi khi cào URL {url}: {err}", "WARNING")
-                        try:
-                            sub_page.close()
-                        except:
-                            pass
+                        if sub_page:
+                            try:
+                                sub_page.close()
+                            except Exception:
+                                pass
 
                 browser.close()
                 self._save_content_registry()

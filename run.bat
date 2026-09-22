@@ -1,13 +1,18 @@
 @echo off
+chcp 65001 >nul
 title ABF Universal Automation ^& Crawler Control Center v6.0
 setlocal enabledelayedexpansion
 
 set "ROOT_DIR=%~dp0"
-set "ABF_DIR=%ROOT_DIR%abf_project"
+if exist "%ROOT_DIR%abf_project" (
+    set "ABF_DIR=%ROOT_DIR%abf_project"
+) else (
+    set "ABF_DIR=%ROOT_DIR%"
+)
 
 :CHECK_ENV
 python --version >nul 2>&1
-if %errorlevel% neq 0 (
+if !errorlevel! neq 0 (
     echo ===============================================================================
     echo [ERROR] May chua cai dat Python hoac chua them Python vao PATH!
     echo Vui long kiem tra lai cai dat Python tren Windows.
@@ -20,6 +25,7 @@ if %errorlevel% neq 0 (
 cls
 cd /d "%ROOT_DIR%"
 set "choice="
+set "RETRY_COUNT=0"
 echo ===============================================================================
 echo            ABF - TRUNG TAM TU DONG HOA VA THU THAP DU LIEU DA KENH
 echo                            (ALL-IN-ONE CONTROL CENTER)
@@ -45,17 +51,14 @@ echo   [0]  Thoat chuong trinh
 echo.
 echo ===============================================================================
 set /p choice="Nhap lua chon cua ban [0-9]: "
-if defined choice set "choice=%choice: =%"
+if defined choice set "choice=!choice: =!"
 
 if not defined choice (
-    set /a RETRY_COUNT+=1
-    if !RETRY_COUNT! geq 3 exit /b 0
     echo.
     echo [!] Vui long nhap so tu 0 den 9.
     ping 127.0.0.1 -n 2 >nul
     goto MENU
 )
-set RETRY_COUNT=0
 
 if "%choice%"=="1" goto RUN_UNIVERSAL_CRAWLER
 if "%choice%"=="2" goto RUN_TIKTOK
@@ -100,13 +103,13 @@ echo   [5] RCGV - Review The Co Gi Vui (https://rcgv.vn/)
 echo.
 set "target_url="
 set /p target_url="Nhap link website bat ky (hoac go 1-5 theo goi y tren): "
-if defined target_url set "target_url=%target_url: =%"
+if defined target_url set "target_url=!target_url: =!"
 
-if "%target_url%"=="1" set target_url=https://www.vib.com.vn/vn/the-tin-dung
-if "%target_url%"=="2" set target_url=https://www.vpbank.com.vn/ca-nhan/dich-vu-the
-if "%target_url%"=="3" set target_url=https://techcombank.com/khach-hang-ca-nhan/the
-if "%target_url%"=="4" set target_url=https://tpb.vn/khach-hang-ca-nhan/the-tin-dung
-if "%target_url%"=="5" set target_url=https://rcgv.vn/
+if "!target_url!"=="1" set "target_url=https://www.vib.com.vn/vn/the-tin-dung"
+if "!target_url!"=="2" set "target_url=https://www.vpbank.com.vn/ca-nhan/dich-vu-the"
+if "!target_url!"=="3" set "target_url=https://techcombank.com/khach-hang-ca-nhan/the"
+if "!target_url!"=="4" set "target_url=https://tpb.vn/khach-hang-ca-nhan/the-tin-dung"
+if "!target_url!"=="5" set "target_url=https://rcgv.vn/"
 
 if not defined target_url (
     echo.
@@ -116,34 +119,38 @@ if not defined target_url (
 )
 
 echo.
+set "max_pages="
 set /p max_pages="Nhap so luong trang toi da muon cao [Mac dinh 50, nhap 0 de cao TOAN BO 100%%]: "
-if "%max_pages%"=="" set max_pages=50
+if "!max_pages!"=="" set "max_pages=50"
 
 echo.
 echo Ban muon chay an trinh duyet (Headless) hay hien trinh duyet?
 echo   [1] Hien trinh duyet Chrome (Xem bot tu dong quet, cuon va tai file) [Mac dinh]
 echo   [2] An trinh duyet (Chay ngam nhanh hon)
+set "hl_choice="
 set /p hl_choice="Lua chon [1/2]: "
 
-set HL_FLAG=
-if "%hl_choice%"=="2" set HL_FLAG=--headless
+set "HL_FLAG="
+if "!hl_choice!"=="2" set "HL_FLAG=--headless"
 
 echo.
 echo Ban co muon tu dong dong bo luu vao Supabase Cloud Database khong?
 echo   [1] Co (Luu day du vao bang crawled_web_data de san sang lam RAG) [Mac dinh]
 echo   [2] Khong (Chi luu file JSON va Markdown tren may cuc bo)
+set "sb_choice="
 set /p sb_choice="Lua chon [1/2]: "
 
-set SB_FLAG=
-if "%sb_choice%"=="2" set SB_FLAG=--no-supabase
+set "SB_FLAG="
+if "!sb_choice!"=="2" set "SB_FLAG=--no-supabase"
 
 echo.
 echo Ban muon chay truc tiep hay Chay An Duoi Nen (Background Process)?
 echo   [1] Chay truc tiep tai cua so nay (Theo doi log realtime) [Mac dinh]
 echo   [2] Chay an duoi nen (Tu dong an CMD, ghi log ra file crawler_bg.log)
+set "bg_choice="
 set /p bg_choice="Lua chon [1/2]: "
 
-if "%bg_choice%"=="2" (
+if "!bg_choice!"=="2" (
     echo.
     echo ===============================================================================
     echo [*] Dang khoi dong Crawler chay an duoi nen (Background Daemon)...
@@ -151,7 +158,7 @@ if "%bg_choice%"=="2" (
     echo [*] Tinh nang Chong Sleep: TU DONG KICH HOAT (May khong tu dong ngu)
     echo [*] Luu tru Realtime: Da bat (Cap nhat Supabase va may tinh tung giay)
     echo ===============================================================================
-    powershell -NoProfile -Command "Start-Process python -ArgumentList 'deep_web_crawler.py --url \"%target_url%\" --max-subpages %max_pages% %HL_FLAG% %SB_FLAG%' -WorkingDirectory '%ABF_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%ABF_DIR%\crawler_bg.log' -RedirectStandardError '%ABF_DIR%\crawler_err.log'"
+    powershell -NoProfile -Command "Start-Process python -ArgumentList 'deep_web_crawler.py --url \"!target_url!\" --max-subpages !max_pages! !HL_FLAG! !SB_FLAG!' -WorkingDirectory '%ABF_DIR%' -WindowStyle Hidden -RedirectStandardOutput '%ABF_DIR%\crawler_bg.log' -RedirectStandardError '%ABF_DIR%\crawler_err.log'"
     echo.
     echo [V] DA KHOI DONG TIEN TRINH CHAY NGAM THANH CONG!
     echo     Ban co the dong cua so nay hoac lam viec khac.
@@ -162,10 +169,10 @@ if "%bg_choice%"=="2" (
 
 echo.
 echo ===============================================================================
-echo Dang khoi dong Universal Deep Crawler: %target_url%
-echo (Gioi han: %max_pages% trang/tai lieu)...
+echo Dang khoi dong Universal Deep Crawler: !target_url!
+echo (Gioi han: !max_pages! trang/tai lieu)...
 echo ===============================================================================
-python deep_web_crawler.py --url "%target_url%" --max-subpages %max_pages% %HL_FLAG% %SB_FLAG%
+python deep_web_crawler.py --url "!target_url!" --max-subpages !max_pages! !HL_FLAG! !SB_FLAG!
 call :ASK_RAG
 pause
 goto MENU
@@ -180,15 +187,17 @@ echo ===========================================================================
 echo   [2] CAO COMMENT TIKTOK THUC TE VA LUU SUPABASE
 echo ===============================================================================
 echo.
+set "tiktok_target="
 set /p tiktok_target="Nhap link video hoac username TikTok [Mac dinh: https://www.tiktok.com/@baothetindung.abf]: "
-if "%tiktok_target%"=="" set tiktok_target=https://www.tiktok.com/@baothetindung.abf
+if "!tiktok_target!"=="" set "tiktok_target=https://www.tiktok.com/@baothetindung.abf"
 
+set "tiktok_limit="
 set /p tiktok_limit="So comment muon cao [Mac dinh: 30]: "
-if "%tiktok_limit%"=="" set tiktok_limit=30
+if "!tiktok_limit!"=="" set "tiktok_limit=30"
 
 echo.
-echo Dang cao binh luan tu: %tiktok_target% ...
-python crawl_tiktok_n8n.py --target "%tiktok_target%" --limit %tiktok_limit%
+echo Dang cao binh luan tu: !tiktok_target! ...
+python crawl_tiktok_n8n.py --target "!tiktok_target!" --limit !tiktok_limit!
 echo.
 pause
 goto MENU
@@ -213,7 +222,7 @@ powershell -NoProfile -Command "Get-Process chrome -ErrorAction SilentlyContinue
 REM Kiem tra cac thu vien can thiet
 echo [*] Dang kiem tra moi truong thu vien Playwright ^& Requests...
 python -c "import playwright, requests" >nul 2>&1
-if %errorlevel% neq 0 (
+if !errorlevel! neq 0 (
     echo [*] Dang cai dat thu vien con thieu...
     pip install playwright requests
     playwright install chromium
@@ -245,7 +254,7 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000" ^| findstr "LISTENING
 )
 
 python serve.py
-if %ERRORLEVEL% NEQ 0 (
+if !ERRORLEVEL! NEQ 0 (
     echo.
     echo [LOI] Khong the chay server bang serve.py. Thu chay che do du phong...
     start http://127.0.0.1:3000
@@ -338,8 +347,9 @@ goto MENU
 :ASK_RAG
 echo.
 echo -------------------------------------------------------------------------------
+set "do_rag="
 set /p do_rag="Ban co muon chay tiep RAG Pipeline de tao Vector Knowledge Base khong? (Y/N) [Mac dinh Y]: "
-if /i "%do_rag%"=="N" (
+if /i "!do_rag!"=="N" (
     echo [i] Da bo qua buoc RAG Vector. Du lieu tho da luu tai Supabase 'crawled_web_data'.
     goto :eof
 )
@@ -352,4 +362,5 @@ goto :eof
 :EXIT_PROG
 echo.
 echo Cam on ban da su dung ABF Universal Automation Control Center!
+pause
 exit /b 0
