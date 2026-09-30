@@ -1,95 +1,77 @@
 /**
  * Embedding Generator: Generates 3072-dimensional vector embeddings
- * Compatible with Supabase documents.embedding table.
- * All API keys are loaded strictly from environment variables.
+ * Ưu tiên số 1: Vilao AI (OpenAI dg/text-embedding-3-large) - Tốc độ cao, không giới hạn quota
+ * Dự phòng số 2: Google Gemini (models/gemini-embedding-001)
  */
 
-function getGeminiKeys(): string[] {
-  const primary = process.env.GEMINI_API_KEY;
-  const multi = process.env.GEMINI_API_KEYS;
-  const keys: string[] = [];
-
-  if (primary) keys.push(primary);
-  if (multi) {
-    keys.push(...multi.split(',').map((k) => k.trim()).filter(Boolean));
-  }
-  return keys.length > 0 ? keys : [''];
-}
-
-let keyIndex = 0;
-
-function getNextKey(): string {
-  const keys = getGeminiKeys();
-  const key = keys[keyIndex % keys.length];
-  keyIndex = (keyIndex + 1) % keys.length;
-  return key;
-}
-
-export async function generateGeminiEmbedding(text: string, retries = 3): Promise<number[]> {
-  const cleanText = text.replace(/\s+/g, ' ').trim().slice(0, 8000);
+export async function generateEmbedding(text: string): Promise<number[]> {
+  const cleanText = text.replace(/\s+/g, ' ').trim().slice(0, 7500);
   if (!cleanText) {
-    throw new Error('Text is empty for embedding');
+    throw new Error('Văn bản trống không thể tạo vector');
   }
 
-  for (let attempt = 0; attempt < retries; attempt++) {
-    const apiKey = getNextKey();
-    if (!apiKey) break;
+  const vilaoUrl = (process.env.VILAO_BASE_URL || 'https://api.vilao.ai/v1').replace(/\/+$/, '');
+  const vilaoKey = process.env.VILAO_API_KEY || process.env.OPENAI_API_KEY;
+  const vilaoModel = process.env.VILAO_EMBEDDING_MODEL || 'dg/text-embedding-3-large';
 
+  // 1. ƯU TIÊN SỐ 1: VILAO AI EMBEDDING (3072 dims)
+  if (vilaoKey) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
-      const resp = await fetch(url, {
+      const resp = await fetch(`${vilaoUrl}/embeddings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${vilaoKey}`,
+        },
+        body: JSON.stringify({
+          model: vilaoModel,
+          input: cleanText,
+        }),
+      });
+
+      if (resp.ok) {
+        const json = await resp.json();
+        const vector = json.data?.[0]?.embedding;
+        if (Array.isArray(vector) && vector.length === 3072) {
+          return vector;
+        }
+      } else {
+        const errText = await resp.text();
+        console.warn(`[Vilao AI Embedding Warning]: ${resp.status} - ${errText.slice(0, 150)}`);
+      }
+    } catch (err: any) {
+      console.warn(`[Vilao AI Connection Error]: ${err.message}`);
+    }
+  }
+
+  // 2. DỰ PHÒNG SỐ 2: GOOGLE GEMINI EMBEDDING (3072 dims)
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (geminiKey) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${geminiKey}`;
+      const gResp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'models/gemini-embedding-001',
-          content: {
-            parts: [{ text: cleanText }],
-          },
+          content: { parts: [{ text: cleanText }] },
         }),
       });
 
-      if (!resp.ok) {
-        const errorText = await resp.text();
-        console.warn(`[Gemini Embedding] Attempt ${attempt + 1} failed: ${resp.status} - ${errorText.slice(0, 100)}`);
-        await new Promise((r) => setTimeout(r, 600));
-        continue;
+      if (gResp.ok) {
+        const gJson = await gResp.json();
+        const gVector = gJson.embedding?.values;
+        if (Array.isArray(gVector) && gVector.length === 3072) {
+          return gVector;
+        }
       }
-
-      const json = await resp.json();
-      const embedding = json.embedding?.values;
-      if (Array.isArray(embedding) && embedding.length > 0) {
-        return embedding;
-      }
-    } catch (err: any) {
-      console.warn(`[Gemini Embedding] Exception on attempt ${attempt + 1}: ${err.message}`);
-      await new Promise((r) => setTimeout(r, 600));
+    } catch (gErr: any) {
+      console.warn(`[Gemini Fallback Error]: ${gErr.message}`);
     }
   }
 
-  // Fallback to OpenAI text-embedding-3-large (3072 dimensions) if Gemini fails
-  if (process.env.OPENAI_API_KEY) {
-    try {
-      const openaiResp = await fetch('https://api.openai.com/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'text-embedding-3-large',
-          input: cleanText,
-          dimensions: 3072,
-        }),
-      });
-
-      if (openaiResp.ok) {
-        const ojson = await openaiResp.json();
-        return ojson.data[0].embedding;
-      }
-    } catch (err) {
-      console.error('[OpenAI Embedding Fallback Failed]:', err);
-    }
-  }
-
-  throw new Error('Failed to generate 3072-dim vector embedding. Vui lòng kiểm tra GEMINI_API_KEY.');
+  throw new Error('Không thể tạo vector embedding 3072 chiều từ Vilao AI hoặc Gemini. Vui lòng kiểm tra OPENAI_API_KEY / VILAO_API_KEY.');
 }
+
+// Giữ alias cho crawler và các route hiện tại
+export const generateGeminiEmbedding = generateEmbedding;
