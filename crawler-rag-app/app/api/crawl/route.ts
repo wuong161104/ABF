@@ -7,7 +7,9 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { url, maxPages = 1, instantRag = true } = body;
+    const { url, instantRag = true } = body;
+    // Default: crawl full website (up to 8 internal pages per execution to fit safely within Vercel 60s limits)
+    const maxSubpages = typeof body.maxPages === 'number' && body.maxPages > 0 ? body.maxPages : 8;
 
     if (!url || !url.startsWith('http')) {
       return new Response(JSON.stringify({ error: 'URL không hợp lệ' }), {
@@ -24,21 +26,38 @@ export async function POST(req: NextRequest) {
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         };
 
+        const log = (tag: string, message: string, type: 'info' | 'success' | 'warn' | 'error' = 'info') => {
+          sendEvent('log', {
+            timestamp: new Date().toLocaleTimeString('vi-VN'),
+            tag,
+            message,
+            type,
+          });
+        };
+
         try {
+          sendEvent('progress', {
+            percent: 5,
+            stage: 'ingestion',
+            message: `Bắt đầu kết nối mục tiêu: ${url}`,
+          });
+
           sendEvent('pipeline_step', {
             stepId: 'fetch',
             status: 'processing',
             message: `Đang kết nối và tải toàn bộ DOM: ${url}`,
           });
+          log('CRAWL', `Bắt đầu phân tích trang chủ: ${url}`);
 
           // 1. Crawl main page
           const mainPage = await crawlSinglePage(url);
+          log('CRAWL', `Đã bóc tách trang chính: "${mainPage.title}" (${mainPage.headings.length} headings, ${mainPage.tables.length} bảng biểu)`, 'success');
 
           sendEvent('pipeline_step', {
             stepId: 'fetch',
             status: 'completed',
             count: 1,
-            message: `Đã trích xuất trang chính: "${mainPage.title}" (${mainPage.headings.length} headings, ${mainPage.tables.length} tables)`,
+            message: `Đã trích xuất trang chính: "${mainPage.title}"`,
           });
 
           sendEvent('pipeline_step', {
@@ -47,56 +66,117 @@ export async function POST(req: NextRequest) {
             count: mainPage.tables.length,
             message: `Bóc tách cấu trúc HTML: ${mainPage.tables.length} bảng biểu & biểu phí đã chuẩn hóa`,
           });
+          if (mainPage.tables.length > 0) {
+            log('VISION_OCR', `Chuẩn hóa ${mainPage.tables.length} bảng biểu / biểu phí sang Markdown Table`, 'info');
+          }
 
-          // 2. Chunking
+          sendEvent('progress', {
+            percent: 25,
+            stage: 'chunking',
+            message: 'Đang phân đoạn ngữ nghĩa Semantic Chunking...',
+          });
+
+          // 2. Chunking main page
           sendEvent('pipeline_step', {
             stepId: 'chunking',
             status: 'processing',
             message: 'Đang phân đoạn ngữ nghĩa (Semantic Chunking 900 chars / 150 overlap)...',
           });
 
-          const chunks = chunkTextSemantically(mainPage.markdown, {
+          const allChunks: Array<{ heading: string; content: string; url: string; title: string }> = [];
+          const mainChunks = chunkTextSemantically(mainPage.markdown, {
             url: mainPage.url,
             title: mainPage.title,
           });
+          mainChunks.forEach((c) => allChunks.push({ ...c, url: mainPage.url, title: mainPage.title }));
+          log('CHUNKER', `Trang chính tạo ${mainChunks.length} chunks ngữ cảnh tiêu đề`, 'success');
+
+          // 3. Recursive Subpages Crawl (Toàn bộ website)
+          const sublinks = mainPage.sublinks.slice(0, maxSubpages);
+          if (sublinks.length > 0) {
+            log('RECURSIVE', `Phát hiện ${mainPage.sublinks.length} link nội bộ. Tiến hành quét đệ quy ${sublinks.length} trang con...`, 'info');
+            sendEvent('pipeline_step', {
+              stepId: 'fetch',
+              status: 'processing',
+              count: 1 + sublinks.length,
+              message: `Đang quét đệ quy toàn bộ ${sublinks.length} trang con nội bộ...`,
+            });
+
+            let subIndex = 0;
+            for (const subUrl of sublinks) {
+              subIndex++;
+              const subPercent = 25 + Math.round((subIndex / sublinks.length) * 15);
+              sendEvent('progress', {
+                percent: subPercent,
+                stage: 'subpages',
+                message: `Đang cào trang con (${subIndex}/${sublinks.length}): ${subUrl.slice(0, 60)}...`,
+              });
+              try {
+                const sub = await crawlSinglePage(subUrl);
+                const scs = chunkTextSemantically(sub.markdown, {
+                  url: sub.url,
+                  title: sub.title,
+                });
+                scs.forEach((c) => allChunks.push({ ...c, url: sub.url, title: sub.title }));
+                log('CRAWL_SUB', `[${subIndex}/${sublinks.length}] Hoàn tất: "${sub.title}" (${scs.length} chunks)`, 'success');
+              } catch (subErr: any) {
+                log('WARN', `Bỏ qua link ${subUrl}: ${subErr.message}`, 'warn');
+              }
+            }
+
+            sendEvent('pipeline_step', {
+              stepId: 'fetch',
+              status: 'completed',
+              count: 1 + sublinks.length,
+              message: `Đã cào toàn bộ trang chính và ${sublinks.length} trang con liên kết`,
+            });
+          }
 
           sendEvent('pipeline_step', {
             stepId: 'chunking',
             status: 'completed',
-            count: chunks.length,
-            message: `Tạo thành công ${chunks.length} chunks có ngữ cảnh tiêu đề`,
+            count: allChunks.length,
+            message: `Tổng cộng ${allChunks.length} chunks ngữ nghĩa toàn bộ website`,
           });
+          log('CHUNKER', `Tổng hợp hoàn tất: ${allChunks.length} chunks sẵn sàng RAG`, 'success');
 
-          // 3. Instant RAG: Sync each chunk immediately to Supabase
-          if (instantRag) {
+          // 4. Instant RAG: Sync each chunk immediately to Supabase via Vilao AI
+          if (instantRag && allChunks.length > 0) {
             sendEvent('pipeline_step', {
               stepId: 'embedding',
               status: 'processing',
-              message: 'Bắt đầu quá trình Instant RAG: Sinh vector 3072 dims & Upsert Supabase...',
+              message: 'Bắt đầu Instant RAG: Sinh vector 3072 dims qua Vilao AI & Upsert Supabase...',
             });
+            log('VILAO_AI', `Bắt đầu sinh Vector 3072D (dg/text-embedding-3-large) cho ${allChunks.length} chunks...`, 'info');
 
             let syncedCount = 0;
-            for (let i = 0; i < chunks.length; i++) {
-              const chunk = chunks[i];
-              sendEvent('chunk_progress', {
-                status: 'embedding',
-                index: i + 1,
-                total: chunks.length,
-                heading: chunk.heading,
-                preview: chunk.content.slice(0, 120),
+            for (let i = 0; i < allChunks.length; i++) {
+              const item = allChunks[i];
+              const ragPercent = 40 + Math.round(((i + 1) / allChunks.length) * 58);
+
+              sendEvent('progress', {
+                percent: ragPercent,
+                stage: 'embedding',
+                current: i + 1,
+                total: allChunks.length,
+                message: `Đang Vectorize & Upsert Supabase (${i + 1}/${allChunks.length}): ${item.heading.slice(0, 45)}...`,
               });
 
-              const syncedChunk = await syncChunkToSupabase(chunk, {
-                url: mainPage.url,
-                title: mainPage.title,
-                type: 'web_page',
-              });
+              const syncedChunk = await syncChunkToSupabase(
+                { heading: item.heading, content: item.content },
+                {
+                  url: item.url,
+                  title: item.title,
+                  type: 'web_page',
+                }
+              );
 
               syncedCount++;
+              log('SUPABASE', `[${syncedCount}/${allChunks.length}] Synced chunk ID #${syncedChunk.id} [${item.heading}] -> pgvector (3072D)`, 'success');
 
               sendEvent('chunk_synced', {
                 chunk: syncedChunk,
-                progress: { current: syncedCount, total: chunks.length },
+                progress: { current: syncedCount, total: allChunks.length },
               });
             }
 
@@ -104,7 +184,7 @@ export async function POST(req: NextRequest) {
               stepId: 'embedding',
               status: 'completed',
               count: syncedCount,
-              message: `Hoàn tất embedding 3072 chiều cho ${syncedCount} chunks`,
+              message: `Hoàn tất embedding 3072D (Vilao AI) cho ${syncedCount} chunks`,
             });
 
             sendEvent('pipeline_step', {
@@ -115,54 +195,33 @@ export async function POST(req: NextRequest) {
             });
           }
 
-          // 4. Crawl subpages if requested (up to maxPages)
-          if (maxPages > 1 && mainPage.sublinks.length > 0) {
-            const subpagesToCrawl = mainPage.sublinks.slice(0, maxPages - 1);
-            sendEvent('log', {
-              message: `Tiến hành cào tiếp ${subpagesToCrawl.length} trang con nội bộ liên quan...`,
-            });
-
-            for (const subUrl of subpagesToCrawl) {
-              try {
-                const sub = await crawlSinglePage(subUrl);
-                const subChunks = chunkTextSemantically(sub.markdown, {
-                  url: sub.url,
-                  title: sub.title,
-                });
-
-                if (instantRag) {
-                  for (const sc of subChunks) {
-                    const synced = await syncChunkToSupabase(sc, {
-                      url: sub.url,
-                      title: sub.title,
-                      type: 'web_subpage',
-                    });
-                    sendEvent('chunk_synced', {
-                      chunk: synced,
-                      isSubpage: true,
-                    });
-                  }
-                }
-              } catch (subErr: any) {
-                console.warn(`[Subpage Skip]: ${subUrl} - ${subErr.message}`);
-              }
-            }
-          }
+          sendEvent('progress', {
+            percent: 100,
+            stage: 'finished',
+            message: `Hoàn tất toàn bộ quy trình! Đã RAG thành công ${allChunks.length} chunks vào Supabase.`,
+          });
+          log('FINISHED', `Toàn bộ quy trình hoàn tất 100%. Cơ sở tri thức Supabase đã sẵn sàng phục vụ RAG.`, 'success');
 
           sendEvent('finished', {
             success: true,
             title: mainPage.title,
             url: mainPage.url,
-            totalImages: mainPage.images.length,
+            totalChunks: allChunks.length,
             sublinksCount: mainPage.sublinks.length,
           });
 
           controller.close();
         } catch (err: any) {
+          log('ERROR', `Lỗi dừng đột ngột: ${err.message}`, 'error');
           sendEvent('pipeline_step', {
             stepId: 'fetch',
             status: 'error',
             message: err.message,
+          });
+          sendEvent('progress', {
+            percent: 100,
+            stage: 'error',
+            message: `Lỗi: ${err.message}`,
           });
           controller.close();
         }

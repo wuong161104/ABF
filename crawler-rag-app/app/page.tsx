@@ -5,7 +5,6 @@ import {
   Globe,
   FileText,
   Database,
-  Layers,
   Sparkles,
   CheckCircle2,
   AlertCircle,
@@ -14,9 +13,18 @@ import {
   Zap,
   Eye,
   FileUp,
-  Activity
+  Activity,
+  Terminal,
+  Copy
 } from 'lucide-react';
 import { PipelineNode, CrawledChunk } from '@/lib/types';
+
+interface LogEntry {
+  timestamp: string;
+  tag: string;
+  message: string;
+  type: 'info' | 'success' | 'warn' | 'error';
+}
 
 export default function Home() {
   // Navigation tabs
@@ -25,7 +33,6 @@ export default function Home() {
 
   // Crawler inputs
   const [targetUrl, setTargetUrl] = useState('https://www.vpbank.com.vn/ca-nhan/dich-vu-the');
-  const [maxPages, setMaxPages] = useState(1);
   const [instantRag, setInstantRag] = useState(true);
 
   // Document inputs
@@ -37,13 +44,16 @@ export default function Home() {
     { id: 'fetch', name: '1. Ingestion', description: 'Web Fetch / Doc Upload', status: 'idle', count: 0 },
     { id: 'vision_ocr', name: '2. Multimodal Vision', description: 'Điểm ảnh & Điểm chữ OCR', status: 'idle', count: 0 },
     { id: 'chunking', name: '3. Semantic Chunker', description: 'Structure & Overlap (900c)', status: 'idle', count: 0 },
-    { id: 'embedding', name: '4. Vectorizer (3072d)', description: 'Gemini Vector Embedding', status: 'idle', count: 0 },
+    { id: 'embedding', name: '4. Vectorizer (3072d)', description: 'Vilao AI (dg/text-embedding-3-large)', status: 'idle', count: 0 },
     { id: 'supabase', name: '5. Supabase Sync', description: 'pgvector & Knowledge DB', status: 'idle', count: 0 },
   ]);
 
-  // Real-time chunks and logs
+  // Real-time chunks, progress & logs
   const [syncedChunks, setSyncedChunks] = useState<CrawledChunk[]>([]);
-  const [logs, setLogs] = useState<string[]>([]);
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [progressPercent, setProgressPercent] = useState<number>(0);
+  const [progressStage, setProgressStage] = useState<string>('idle');
+  const [progressMessage, setProgressMessage] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeStepText, setActiveStepText] = useState('Hệ thống sẵn sàng tiếp nhận URL hoặc tài liệu.');
 
@@ -65,7 +75,7 @@ export default function Home() {
 
   useEffect(() => {
     streamEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [syncedChunks, logs]);
+  }, [logEntries, syncedChunks]);
 
   const fetchStats = async () => {
     setIsLoadingStats(true);
@@ -94,6 +104,7 @@ export default function Home() {
             status,
             count: countDelta > 0 ? countDelta : node.count,
             detail: message || node.detail,
+            message: message || node.message,
           };
         }
         return node;
@@ -101,7 +112,6 @@ export default function Home() {
     );
     if (message) {
       setActiveStepText(message);
-      setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`]);
     }
   };
 
@@ -110,11 +120,14 @@ export default function Home() {
       { id: 'fetch', name: '1. Ingestion', description: 'Web Fetch / Doc Upload', status: 'idle', count: 0 },
       { id: 'vision_ocr', name: '2. Multimodal Vision', description: 'Điểm ảnh & Điểm chữ OCR', status: 'idle', count: 0 },
       { id: 'chunking', name: '3. Semantic Chunker', description: 'Structure & Overlap (900c)', status: 'idle', count: 0 },
-      { id: 'embedding', name: '4. Vectorizer (3072d)', description: 'Gemini Vector Embedding', status: 'idle', count: 0 },
+      { id: 'embedding', name: '4. Vectorizer (3072d)', description: 'Vilao AI (dg/text-embedding-3-large)', status: 'idle', count: 0 },
       { id: 'supabase', name: '5. Supabase Sync', description: 'pgvector & Knowledge DB', status: 'idle', count: 0 },
     ]);
     setSyncedChunks([]);
-    setLogs([]);
+    setLogEntries([]);
+    setProgressPercent(0);
+    setProgressStage('idle');
+    setProgressMessage('');
   };
 
   // Trigger Crawler Pipeline
@@ -125,6 +138,9 @@ export default function Home() {
     setActiveBottomTab('stream');
 
     try {
+      setProgressPercent(5);
+      setProgressStage('ingestion');
+      setProgressMessage(`Đang kết nối mục tiêu: ${targetUrl}`);
       updateNodeStatus('fetch', 'processing', 0, `Đang kết nối và quét DOM: ${targetUrl}`);
 
       const response = await fetch('/api/crawl', {
@@ -132,7 +148,6 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: targetUrl,
-          maxPages,
           instantRag,
         }),
       });
@@ -172,6 +187,10 @@ export default function Home() {
                 errorStepMessage = eventData.message || 'Lỗi xử lý';
               }
               updateNodeStatus(eventData.stepId, eventData.status, eventData.count || 0, eventData.message);
+            } else if (eventName === 'progress') {
+              setProgressPercent(eventData.percent || 0);
+              setProgressStage(eventData.stage || '');
+              if (eventData.message) setProgressMessage(eventData.message);
             } else if (eventName === 'chunk_synced') {
               setSyncedChunks((prev) => [...prev, eventData.chunk]);
               setPipelineNodes((nodes) =>
@@ -184,7 +203,27 @@ export default function Home() {
                 )
               );
             } else if (eventName === 'log') {
-              setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${eventData.message}`]);
+              if (typeof eventData === 'string') {
+                setLogEntries((prev) => [
+                  ...prev,
+                  {
+                    timestamp: new Date().toLocaleTimeString('vi-VN'),
+                    tag: 'SYS',
+                    message: eventData,
+                    type: 'info',
+                  },
+                ]);
+              } else {
+                setLogEntries((prev) => [
+                  ...prev,
+                  {
+                    timestamp: eventData.timestamp || new Date().toLocaleTimeString('vi-VN'),
+                    tag: eventData.tag || 'INFO',
+                    message: eventData.message || '',
+                    type: eventData.type || 'info',
+                  },
+                ]);
+              }
             }
           }
         }
@@ -192,13 +231,30 @@ export default function Home() {
 
       fetchStats();
       if (pipelineHasError) {
+        setProgressPercent(100);
+        setProgressStage('error');
         setActiveStepText(`❌ Quá trình gián đoạn: ${errorStepMessage}`);
       } else {
+        setProgressPercent(100);
+        setProgressStage('finished');
+        setProgressMessage('Hoàn tất toàn bộ quy trình Crawl & RAG tức thì vào Supabase!');
         setActiveStepText('✅ Hoàn tất toàn bộ quy trình Crawl & RAG tức thì vào Supabase!');
       }
     } catch (err: any) {
       updateNodeStatus('fetch', 'error', 0, err.message);
       setActiveStepText(`❌ Lỗi kết nối: ${err.message}`);
+      setProgressPercent(100);
+      setProgressStage('error');
+      setProgressMessage(`Lỗi: ${err.message}`);
+      setLogEntries((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'ERROR',
+          message: err.message,
+          type: 'error',
+        },
+      ]);
     } finally {
       setIsProcessing(false);
     }
@@ -212,14 +268,38 @@ export default function Home() {
     setActiveBottomTab('stream');
 
     try {
+      setProgressPercent(10);
+      setProgressStage('upload');
+      setProgressMessage(`Đang nạp file: ${selectedFile.name}`);
       updateNodeStatus('fetch', 'processing', 1, `Đang nạp file: ${selectedFile.name}`);
+      setLogEntries((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'DOC_UPLOAD',
+          message: `Nạp tệp ${selectedFile.name} (${(selectedFile.size / 1024).toFixed(1)} KB)...`,
+          type: 'info',
+        },
+      ]);
 
       const formData = new FormData();
       formData.append('file', selectedFile);
       formData.append('instantRag', 'true');
       formData.append('visionOcr', enableVisionOcr ? 'true' : 'false');
 
+      setProgressPercent(35);
+      setProgressStage('vision_ocr');
+      setProgressMessage('Đang phân tích điểm ảnh & điểm chữ bằng Gemini Vision...');
       updateNodeStatus('vision_ocr', 'processing', 1, 'Đang phân tích điểm ảnh & điểm chữ bằng Gemini Vision...');
+      setLogEntries((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'VISION_OCR',
+          message: 'Bóc tách điểm chữ, nhận diện bảng biểu & điểm ảnh qua Gemini Multimodal Vision...',
+          type: 'info',
+        },
+      ]);
 
       const resp = await fetch('/api/ingest', {
         method: 'POST',
@@ -231,19 +311,61 @@ export default function Home() {
         throw new Error(result.error || 'Lỗi xử lý tài liệu');
       }
 
+      setProgressPercent(75);
+      setProgressStage('embedding');
+      setProgressMessage(`Đang sinh vector 3072D (Vilao AI) cho ${result.totalChunks} đoạn...`);
+
       updateNodeStatus('vision_ocr', 'completed', 1, result.pixelHighlights?.join(', ') || 'Đã phân tích điểm chữ & điểm ảnh');
       updateNodeStatus('chunking', 'completed', result.totalChunks, `Phân tách thành công ${result.totalChunks} đoạn ngữ nghĩa`);
       updateNodeStatus('embedding', 'completed', result.syncedCount, `Hoàn tất embedding 3072D cho ${result.syncedCount} chunks`);
       updateNodeStatus('supabase', 'completed', result.syncedCount, `Đã đồng bộ ${result.syncedCount} bản ghi vào Supabase`);
+
+      setLogEntries((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'CHUNKER',
+          message: `Tạo ${result.totalChunks} đoạn văn bản ngữ nghĩa có overlap`,
+          type: 'success',
+        },
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'VILAO_AI',
+          message: `Đã sinh vector 3072D qua Vilao AI (dg/text-embedding-3-large)`,
+          type: 'success',
+        },
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'SUPABASE',
+          message: `Đã đồng bộ thành công ${result.syncedCount} bản ghi vào public.documents trên Supabase`,
+          type: 'success',
+        },
+      ]);
 
       if (Array.isArray(result.chunks)) {
         setSyncedChunks(result.chunks);
       }
 
       fetchStats();
+      setProgressPercent(100);
+      setProgressStage('finished');
+      setProgressMessage(`Tài liệu ${selectedFile.name} đã được phân tích và RAG Supabase thành công!`);
       setActiveStepText(`✅ Tài liệu ${selectedFile.name} đã được phân tích điểm ảnh/điểm chữ và RAG vào Supabase!`);
     } catch (err: any) {
       updateNodeStatus('fetch', 'error', 0, err.message);
+      setActiveStepText(`❌ Lỗi xử lý tài liệu: ${err.message}`);
+      setProgressPercent(100);
+      setProgressStage('error');
+      setProgressMessage(`Lỗi: ${err.message}`);
+      setLogEntries((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'ERROR',
+          message: err.message,
+          type: 'error',
+        },
+      ]);
     } finally {
       setIsProcessing(false);
     }
@@ -484,17 +606,9 @@ export default function Home() {
                   <span>Bật chế độ &quot;Cào đoạn nào - RAG Supabase đoạn đó ngay lập tức&quot;</span>
                 </label>
 
-                <div className="flex items-center gap-2">
-                  <span>Số trang con tối đa:</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="20"
-                    value={maxPages}
-                    onChange={(e) => setMaxPages(parseInt(e.target.value) || 1)}
-                    className="w-16 bg-[#080B12] border border-[#212E44] rounded-md px-2 py-1 text-center text-white"
-                  />
-                  <span className="text-[11px] text-slate-500">(1 = Chỉ trang chính, &gt;1 = Tự động quét tiếp link con)</span>
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-950/60 border border-cyan-800/40 text-cyan-300 font-mono text-[11px]">
+                  <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Chế độ: <b>Tự động cào toàn bộ website &amp; đệ quy tất cả link con nội bộ</b></span>
                 </div>
               </div>
             </div>
@@ -586,8 +700,8 @@ export default function Home() {
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <Activity className="w-3.5 h-3.5" />
-                <span>Live RAG Chunks Stream ({syncedChunks.length})</span>
+                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Tiến Độ &amp; Realtime Console Logs ({logEntries.length})</span>
               </button>
 
               <button
@@ -618,58 +732,161 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="text-[11px] font-mono text-slate-500">
-              Embedding Model: <span className="text-cyan-400">Gemini 3072D</span>
+            <div className="text-[11px] font-mono text-slate-400">
+              Embedding Engine: <span className="text-cyan-400 font-bold">Vilao AI (3072D)</span>
             </div>
           </div>
 
-          {/* TAB CONTENT 1: LIVE RAG CHUNKS STREAM */}
+          {/* TAB CONTENT 1: REALTIME PROGRESS & CONSOLE LOGS */}
           {activeBottomTab === 'stream' && (
-            <div className="p-4 flex-1 flex flex-col space-y-3">
-              {syncedChunks.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-slate-500 py-16">
-                  <Layers className="w-12 h-12 text-slate-700 mb-3" />
-                  <p className="text-sm font-medium">Chưa có dữ liệu nào được RAG vào Supabase trong phiên này.</p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    Nhập URL hoặc tải tệp lên phía trên rồi nhấn Bắt đầu để thấy các chunk xuất hiện theo thời gian thực!
-                  </p>
+            <div className="p-4 flex-1 flex flex-col space-y-4">
+              {/* CYBER DOWNLOAD & PROGRESS BAR (Matches user reference) */}
+              <div className="p-4 rounded-2xl bg-[#070B14] border border-cyan-500/30 shadow-[0_0_25px_rgba(6,182,212,0.15)] flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-3 w-3">
+                      {isProcessing && (
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                      )}
+                      <span
+                        className={`relative inline-flex rounded-full h-3 w-3 ${
+                          isProcessing
+                            ? 'bg-cyan-500'
+                            : progressPercent === 100
+                            ? 'bg-emerald-500'
+                            : 'bg-slate-600'
+                        }`}
+                      ></span>
+                    </span>
+                    <span className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-300">
+                      {isProcessing
+                        ? 'TIẾN ĐỘ CRAWL & INSTANT RAG VILAO AI'
+                        : progressPercent === 100
+                        ? 'ĐÃ HOÀN TẤT ĐỒNG BỘ 100%'
+                        : 'TRẠNG THÁI SẴN SÀNG'}
+                    </span>
+                    {progressStage && progressStage !== 'idle' && (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-800/60 text-cyan-300 uppercase">
+                        STAGE: {progressStage}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl font-mono font-black text-cyan-300 tracking-wider">
+                      {progressPercent}%
+                    </span>
+                  </div>
                 </div>
-              ) : (
-                <div className="space-y-3 max-h-[550px] overflow-y-auto pr-1">
-                  {syncedChunks.map((chunk, idx) => (
+
+                {/* Progress Bar Track */}
+                <div className="relative w-full h-5 bg-[#03060C] rounded-full p-0.5 overflow-hidden border border-cyan-500/25 shadow-inner">
+                  {/* Glowing progress fill with animated stripes */}
+                  <div
+                    className="h-full rounded-full transition-all duration-300 relative overflow-hidden bg-gradient-to-r from-cyan-600 via-sky-500 to-blue-500 shadow-[0_0_15px_rgba(6,182,212,0.7)]"
+                    style={{ width: `${Math.max(progressPercent, isProcessing ? 6 : 0)}%` }}
+                  >
+                    {/* Animated diagonal candy stripes */}
                     <div
-                      key={chunk.id || idx}
-                      className="p-3.5 rounded-xl bg-[#090D17] border border-[#1A2438] hover:border-cyan-500/40 transition glow-card flex flex-col gap-2"
+                      className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.25)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.25)_50%,rgba(255,255,255,0.25)_75%,transparent_75%,transparent)] bg-[length:24px_24px] animate-pulse"
+                    />
+                    {/* Leading glowing pill cursor */}
+                    <div className="absolute right-0 top-0 bottom-0 w-2.5 bg-white rounded-full opacity-90 blur-[0.5px]" />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                  <span className="truncate max-w-xl text-slate-300">
+                    {progressMessage || activeStepText}
+                  </span>
+                  <span className="text-cyan-400 shrink-0 font-semibold">
+                    {isProcessing ? 'Đang stream SSE thời gian thực...' : `${syncedChunks.length} chunks đã nạp Supabase`}
+                  </span>
+                </div>
+              </div>
+
+              {/* REALTIME TERMINAL CONSOLE LOGS */}
+              <div className="bg-[#050811] border border-[#151F32] rounded-xl overflow-hidden font-mono flex flex-col flex-1 shadow-2xl">
+                {/* Terminal Window Bar */}
+                <div className="flex items-center justify-between px-3.5 py-2 bg-[#090D18] border-b border-[#151F32]">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80 inline-block" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80 inline-block" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80 inline-block" />
+                    <span className="text-xs text-slate-400 font-mono ml-2">
+                      abf-engine@crawler-rag-stream ~ realtime execution logs
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <button
+                      onClick={() => {
+                        const text = logEntries.map((l) => `[${l.timestamp}] [${l.tag}] ${l.message}`).join('\n');
+                        navigator.clipboard.writeText(text);
+                      }}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#101726] hover:bg-slate-700 text-slate-300 text-[11px] border border-slate-700/60 transition"
+                      title="Sao chép toàn bộ logs"
                     >
-                      <div className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-2">
-                          <span className="w-5 h-5 rounded-md bg-cyan-950 border border-cyan-800/60 text-cyan-300 font-mono flex items-center justify-center text-[10px] font-bold">
-                            #{idx + 1}
-                          </span>
-                          <span className="font-semibold text-white truncate max-w-md">
-                            {chunk.heading || 'Nội dung chung'}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-3 font-mono text-[11px]">
-                          <span className="text-slate-500">~{chunk.tokenEstimate} tokens</span>
-                          <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/40 flex items-center gap-1 font-semibold">
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span>Synced ID: {chunk.embeddingId || 'pgvector'}</span>
-                          </span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-300 bg-[#06080F] p-2.5 rounded-lg font-mono border border-slate-900 leading-relaxed whitespace-pre-wrap">
-                        {chunk.content}
-                      </p>
-                      <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
-                        <span>Nguồn: {chunk.sourceUrl || chunk.fileName}</span>
-                        <span>{chunk.timestamp}</span>
-                      </div>
+                      <Copy className="w-3 h-3 text-cyan-400" />
+                      <span>Copy Logs</span>
+                    </button>
+                    <button
+                      onClick={() => setLogEntries([])}
+                      className="px-2.5 py-1 rounded bg-[#101726] hover:bg-slate-700 text-slate-300 text-[11px] border border-slate-700/60 transition"
+                    >
+                      Xóa Console
+                    </button>
+                  </div>
+                </div>
+
+                {/* Terminal Body */}
+                <div className="p-3.5 space-y-1.5 max-h-[400px] overflow-y-auto text-xs leading-relaxed">
+                  {logEntries.length === 0 ? (
+                    <div className="py-12 text-center text-slate-600">
+                      <Terminal className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                      <p>Console sẵn sàng. Nhấn &quot;BẮT ĐẦU CRAWL &amp; RAG NGAY&quot; để quan sát luồng logs sự kiện.</p>
                     </div>
-                  ))}
+                  ) : (
+                    logEntries.map((l, i) => (
+                      <div
+                        key={i}
+                        className="flex items-start gap-2 text-slate-300 hover:bg-slate-900/50 px-1.5 py-0.5 rounded transition"
+                      >
+                        <span className="text-slate-600 shrink-0 font-mono text-[11px]">
+                          [{l.timestamp}]
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 uppercase tracking-tight ${
+                            l.tag === 'CRAWL' || l.tag === 'CRAWL_SUB'
+                              ? 'bg-cyan-950 text-cyan-300 border border-cyan-800/60'
+                              : l.tag === 'VILAO_AI'
+                              ? 'bg-amber-950 text-amber-300 border border-amber-800/60'
+                              : l.tag === 'SUPABASE' || l.tag === 'FINISHED'
+                              ? 'bg-emerald-950 text-emerald-300 border border-emerald-800/60'
+                              : l.tag === 'CHUNKER'
+                              ? 'bg-blue-950 text-blue-300 border border-blue-800/60'
+                              : l.tag === 'ERROR'
+                              ? 'bg-rose-950 text-rose-300 border border-rose-800/60'
+                              : 'bg-slate-800 text-slate-300'
+                          }`}
+                        >
+                          {l.tag}
+                        </span>
+                        <span
+                          className={`break-all ${
+                            l.type === 'error'
+                              ? 'text-rose-400 font-bold'
+                              : l.type === 'success'
+                              ? 'text-emerald-300'
+                              : 'text-slate-300'
+                          }`}
+                        >
+                          {l.message}
+                        </span>
+                      </div>
+                    ))
+                  )}
                   <div ref={streamEndRef} />
                 </div>
-              )}
+              </div>
             </div>
           )}
 
