@@ -144,6 +144,8 @@ export default function Home() {
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let pipelineHasError = false;
+      let errorStepMessage = '';
 
       if (!reader) throw new Error('Không thể khởi tạo luồng dữ liệu.');
 
@@ -165,6 +167,10 @@ export default function Home() {
             const eventData = JSON.parse(dataMatch[1].trim());
 
             if (eventName === 'pipeline_step') {
+              if (eventData.status === 'error') {
+                pipelineHasError = true;
+                errorStepMessage = eventData.message || 'Lỗi xử lý';
+              }
               updateNodeStatus(eventData.stepId, eventData.status, eventData.count || 0, eventData.message);
             } else if (eventName === 'chunk_synced') {
               setSyncedChunks((prev) => [...prev, eventData.chunk]);
@@ -185,9 +191,14 @@ export default function Home() {
       }
 
       fetchStats();
-      setActiveStepText('✅ Hoàn tất toàn bộ quy trình Crawl & RAG tức thì vào Supabase!');
+      if (pipelineHasError) {
+        setActiveStepText(`❌ Quá trình gián đoạn: ${errorStepMessage}`);
+      } else {
+        setActiveStepText('✅ Hoàn tất toàn bộ quy trình Crawl & RAG tức thì vào Supabase!');
+      }
     } catch (err: any) {
       updateNodeStatus('fetch', 'error', 0, err.message);
+      setActiveStepText(`❌ Lỗi kết nối: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -360,6 +371,11 @@ export default function Home() {
                   <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed mb-2">
                     {node.description}
                   </p>
+                  {isError && node.message && (
+                    <div className="mb-2 p-1.5 rounded-lg bg-rose-950/60 border border-rose-800/60 text-[10px] text-rose-300 font-mono line-clamp-2" title={node.message}>
+                      ⚠️ {node.message}
+                    </div>
+                  )}
                   <div className="flex items-center justify-between text-[11px] font-mono pt-2 border-t border-slate-800/60">
                     <span className="text-slate-500">Items:</span>
                     <span className={isCompleted ? 'text-emerald-400 font-bold' : isProcessing ? 'text-cyan-300 font-bold' : 'text-slate-400'}>

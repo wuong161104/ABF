@@ -6,6 +6,7 @@ export interface PipelineNode {
   count: number;
   badge?: string;
   detail?: string;
+  message?: string;
 }
 
 export interface CrawledChunk {

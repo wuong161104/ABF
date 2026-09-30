@@ -1,3 +1,14 @@
+// Polyfill DOM globals for pdfjs-dist / pdf-parse in Vercel Node serverless environments
+if (typeof (globalThis as any).DOMMatrix === 'undefined') {
+  (globalThis as any).DOMMatrix = class DOMMatrix {};
+}
+if (typeof (globalThis as any).ImageData === 'undefined') {
+  (globalThis as any).ImageData = class ImageData {};
+}
+if (typeof (globalThis as any).Path2D === 'undefined') {
+  (globalThis as any).Path2D = class Path2D {};
+}
+
 import { NextRequest } from 'next/server';
 import { PDFParse } from 'pdf-parse';
 import { analyzePdfLayoutAndPixels } from '@/lib/gemini-vision';

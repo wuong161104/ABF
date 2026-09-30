@@ -51,21 +51,64 @@ export interface ExtractedPage {
 }
 
 export async function crawlSinglePage(url: string): Promise<ExtractedPage> {
-  const resp = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 ABF-Crawler/2.0',
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'vi,en;q=0.9',
-    },
-    signal: AbortSignal.timeout(15000),
-  });
+  const browserHeaders = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    Accept:
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Sec-Ch-Ua': '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1',
+  };
 
-  if (!resp.ok) {
-    throw new Error(`HTTP Error ${resp.status} while fetching ${url}`);
+  let html = '';
+  let usedFallback = false;
+
+  try {
+    const resp = await fetch(url, {
+      headers: browserHeaders,
+      signal: AbortSignal.timeout(12000),
+    });
+
+    if (resp.ok) {
+      html = await resp.text();
+    } else {
+      console.warn(`[Crawler Direct Fetch Failed ${resp.status}]: Kích hoạt Jina Fallback cho ${url}`);
+      usedFallback = true;
+    }
+  } catch (directErr: any) {
+    console.warn(`[Crawler Direct Fetch Exception]: ${directErr.message}. Kích hoạt Jina Fallback...`);
+    usedFallback = true;
   }
 
-  const html = await resp.text();
+  // Fallback qua Jina Reader proxy nếu trang web bật Akamai / WAF chặn IP Cloud
+  if (usedFallback) {
+    try {
+      const jinaResp = await fetch(`https://r.jina.ai/${url}`, {
+        headers: {
+          Accept: 'text/plain',
+          'X-No-Cache': 'true',
+        },
+        signal: AbortSignal.timeout(20000),
+      });
+
+      if (!jinaResp.ok) {
+        throw new Error(`Jina Reader HTTP ${jinaResp.status}`);
+      }
+
+      const jinaMd = await jinaResp.text();
+      return parseJinaMarkdown(url, jinaMd);
+    } catch (fallbackErr: any) {
+      throw new Error(`Không thể cào trang web (WAF/Cloudflare chặn và Fallback thất bại): ${fallbackErr.message}`);
+    }
+  }
+
   const $ = cheerio.load(html);
 
   // Remove noisy elements
@@ -161,6 +204,78 @@ export async function crawlSinglePage(url: string): Promise<ExtractedPage> {
     images: images.slice(0, 20),
     sublinks: sublinks.slice(0, 50),
     markdown: cleanVietnameseText(md),
+  };
+}
+
+/**
+ * Parser cho nội dung Markdown thu về từ Jina Reader fallback (vượt WAF/Cloudflare)
+ */
+export function parseJinaMarkdown(url: string, rawMd: string): ExtractedPage {
+  const parsedOrigin = new URL(url);
+  const baseDomain = parsedOrigin.hostname;
+
+  // 1. Title
+  const titleMatch = rawMd.match(/^Title:\s*(.+)$/m) || rawMd.match(/^#\s*(.+)$/m);
+  const title = titleMatch ? titleMatch[1].trim() : parsedOrigin.hostname;
+
+  // 2. Headings
+  const headings: { level: number; text: string }[] = [];
+  const headingMatches = Array.from(rawMd.matchAll(/^(#{1,6})\s+(.+)$/gm));
+  for (const match of headingMatches) {
+    const level = match[1].length;
+    const text = match[2].trim();
+    if (text.length > 2 && text.length < 200) {
+      headings.push({ level, text });
+    }
+  }
+
+  // 3. Tables (Markdown tables)
+  const tables: string[] = [];
+  const tableMatches = rawMd.match(/(\|.+?\|\n\|[-:\s|]+?\|\n(?:\|.+?\|\n?)+)/g);
+  if (tableMatches) {
+    for (const tbl of tableMatches) {
+      if (tbl.split('\n').length >= 3) {
+        tables.push(tbl.trim());
+      }
+    }
+  }
+
+  // 4. Sublinks
+  const sublinks: string[] = [];
+  const linkMatches = Array.from(rawMd.matchAll(/\[(?:[^\]]*)\]\((https?:\/\/[^\s\)]+)\)/g));
+  for (const lm of linkMatches) {
+    const href = lm[1].trim();
+    if (isInternalUrl(href, baseDomain) && !sublinks.includes(href)) {
+      sublinks.push(href);
+    }
+  }
+
+  // 5. Clean Paragraphs
+  const paragraphs: string[] = [];
+  const lines = rawMd.split('\n\n');
+  for (const block of lines) {
+    const cleaned = cleanVietnameseText(block);
+    if (
+      cleaned.length > 40 &&
+      !cleaned.startsWith('#') &&
+      !cleaned.startsWith('|') &&
+      !cleaned.startsWith('Title:') &&
+      !cleaned.startsWith('URL Source:') &&
+      !cleaned.startsWith('Markdown Content:')
+    ) {
+      paragraphs.push(cleaned);
+    }
+  }
+
+  return {
+    url,
+    title,
+    headings,
+    paragraphs,
+    tables,
+    images: [],
+    sublinks: sublinks.slice(0, 50),
+    markdown: cleanVietnameseText(rawMd),
   };
 }
 

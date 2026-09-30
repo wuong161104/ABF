@@ -22,3 +22,6 @@ abf_project/crawled_data/
 .vercel/
 .gemini/
 .env.local
+
+.vercel
+.env*
