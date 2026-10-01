@@ -32,6 +32,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
           model: vilaoModel,
           input: cleanText,
         }),
+        signal: AbortSignal.timeout(8000),
       });
 
       if (resp.ok) {
@@ -99,6 +100,7 @@ export async function generateBatchEmbeddings(texts: string[]): Promise<number[]
           model: vilaoModel,
           input: cleanTexts,
         }),
+        signal: AbortSignal.timeout(10000),
       });
 
       if (resp.ok) {

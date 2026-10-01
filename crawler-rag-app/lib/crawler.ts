@@ -124,7 +124,7 @@ export async function fetchSitemapUrls(
 
   // 2. Duyệt qua hàng đợi sitemap (hỗ trợ cả sitemap lồng nhau sitemapindex)
   const queue = [...sitemapCandidates];
-  const MAX_SITEMAPS_TO_CRAWL = 20;
+  const MAX_SITEMAPS_TO_CRAWL = 8;
 
   while (queue.length > 0 && visitedSitemaps.size < MAX_SITEMAPS_TO_CRAWL) {
     const smUrl = queue.shift()!;
@@ -139,7 +139,7 @@ export async function fetchSitemapUrls(
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
           Accept: 'application/xml, text/xml, */*',
         },
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(4000),
       });
 
       if (!res.ok) continue;
@@ -205,7 +205,7 @@ export async function crawlSinglePage(url: string): Promise<ExtractedPage> {
   try {
     const resp = await fetch(url, {
       headers: browserHeaders,
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(5000),
     });
 
     if (resp.ok) {
@@ -227,7 +227,7 @@ export async function crawlSinglePage(url: string): Promise<ExtractedPage> {
           Accept: 'text/plain',
           'X-No-Cache': 'true',
         },
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(8000),
       });
 
       if (!jinaResp.ok) {

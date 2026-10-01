@@ -57,6 +57,11 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeStepText, setActiveStepText] = useState('Hệ thống sẵn sàng tiếp nhận URL hoặc tài liệu.');
 
+  // Crawler pagination / batch state
+  const [crawlOffset, setCrawlOffset] = useState<number>(0);
+  const [hasMoreSubpages, setHasMoreSubpages] = useState<boolean>(false);
+  const [discoveredUrlsCount, setDiscoveredUrlsCount] = useState<number>(0);
+
   // Supabase stats
   const [dbStats, setDbStats] = useState({ totalChunks: 0, recentRecords: [] as any[] });
   const [isLoadingStats, setIsLoadingStats] = useState(false);
@@ -130,18 +135,25 @@ export default function Home() {
     setProgressMessage('');
   };
 
-  // Trigger Crawler Pipeline
-  const handleStartCrawl = async () => {
+  // Trigger Crawler Pipeline (Hỗ trợ cào phân đoạn an toàn theo đợt)
+  const handleStartCrawl = async (customOffset?: number) => {
     if (!targetUrl) return;
     setIsProcessing(true);
-    resetPipeline();
+    const currentOffset = typeof customOffset === 'number' ? customOffset : 0;
+    if (currentOffset === 0) {
+      resetPipeline();
+      setCrawlOffset(0);
+      setHasMoreSubpages(false);
+    }
     setActiveBottomTab('stream');
 
     try {
       setProgressPercent(5);
       setProgressStage('ingestion');
-      setProgressMessage(`Đang kết nối mục tiêu: ${targetUrl}`);
-      updateNodeStatus('fetch', 'processing', 0, `Đang kết nối và quét DOM: ${targetUrl}`);
+      setProgressMessage(currentOffset > 0 
+        ? `Đang cào tiếp đợt từ liên kết #${currentOffset + 1}...` 
+        : `Đang kết nối mục tiêu: ${targetUrl}`);
+      updateNodeStatus('fetch', 'processing', 0, currentOffset > 0 ? `Cào tiếp từ link #${currentOffset + 1}...` : `Đang kết nối và quét DOM: ${targetUrl}`);
 
       const response = await fetch('/api/crawl', {
         method: 'POST',
@@ -149,6 +161,7 @@ export default function Home() {
         body: JSON.stringify({
           url: targetUrl,
           instantRag,
+          offset: currentOffset,
         }),
       });
 
@@ -202,6 +215,16 @@ export default function Home() {
                     : n
                 )
               );
+            } else if (eventName === 'finished') {
+              if (typeof eventData.nextOffset === 'number') {
+                setCrawlOffset(eventData.nextOffset);
+              }
+              if (typeof eventData.hasMore === 'boolean') {
+                setHasMoreSubpages(eventData.hasMore);
+              }
+              if (typeof eventData.sublinksCount === 'number') {
+                setDiscoveredUrlsCount(eventData.sublinksCount);
+              }
             } else if (eventName === 'log') {
               if (typeof eventData === 'string') {
                 setLogEntries((prev) => [
@@ -577,7 +600,7 @@ export default function Home() {
                   />
                 </div>
                 <button
-                  onClick={handleStartCrawl}
+                  onClick={() => handleStartCrawl()}
                   disabled={isProcessing}
                   className="px-6 py-3 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-cyan-900/30 transition disabled:opacity-50"
                 >
@@ -610,6 +633,54 @@ export default function Home() {
                   <Globe className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Chế độ: <b>Tự động cào toàn bộ website &amp; đệ quy tất cả link con nội bộ</b></span>
                 </div>
+              </div>
+
+              {/* Batch Continuation Banner */}
+              {hasMoreSubpages && !isProcessing && (
+                <div className="p-4 rounded-xl bg-[#091322] border border-cyan-500/40 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-400 font-bold text-xs">
+                      #{crawlOffset}
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-white">Đã nạp xong đợt {crawlOffset} trang con vào Supabase!</p>
+                      <p className="text-[11px] text-slate-400">
+                        {discoveredUrlsCount > 0 ? `Còn hàng nghìn trang con trong tổng số ${discoveredUrlsCount.toLocaleString()} URLs đã quét được.` : 'Hệ thống đã chốt phiên an toàn (tránh timeout 60s của Vercel).'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleStartCrawl(crawlOffset)}
+                    className="px-4 py-2.5 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-md whitespace-nowrap"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-slate-950" />
+                    <span>Tiếp tục cào đợt tiếp (từ link #{crawlOffset + 1})</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Cloud Runner Deep Crawler Guide Box */}
+              <div className="p-3.5 rounded-xl bg-[#0B101D] border border-indigo-950/80 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2.5 text-slate-300">
+                  <span className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                    <Zap className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <span className="font-semibold text-indigo-300">Cào sâu toàn bộ 6.200+ link không giới hạn thời gian:</span>
+                    <span className="text-slate-400 ml-1">
+                      Web Serverless chạy phiên an toàn từng đợt để không bị ngắt kết nối. Để cào trọn vẹn toàn bộ 6.298 link liên tục qua 6 tiếng, workflow GitHub Actions đã được tích hợp sẵn.
+                    </span>
+                  </div>
+                </div>
+                <a
+                  href="https://github.com/wuong161104/ABF/actions"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 hover:border-indigo-400 font-mono text-[11px] whitespace-nowrap transition flex items-center gap-1.5"
+                >
+                  <span>Mở GitHub Cloud Runner (6h)</span>
+                  <span>↗</span>
+                </a>
               </div>
             </div>
           )}

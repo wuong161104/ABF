@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { url, instantRag = true } = body;
+    const { url, instantRag = true, offset = 0 } = body;
     // Default: recursive crawl (up to 15 prioritized internal pages per execution to stay safely within Vercel limits)
     const maxSubpages = typeof body.maxPages === 'number' && body.maxPages > 0 ? body.maxPages : 15;
 
@@ -22,6 +22,8 @@ export async function POST(req: NextRequest) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
+        const functionStartTime = Date.now();
+        const MAX_SAFE_EXECUTION_MS = 40000; // Ngưỡng an toàn 40s (trên tổng trần 60s của Vercel Serverless)
         const sendEvent = (event: string, data: any) => {
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         };
@@ -80,7 +82,6 @@ export async function POST(req: NextRequest) {
             log('VISION_OCR', `Chuẩn hóa ${mainPage.tables.length} bảng biểu / biểu phí sang Markdown Table`, 'info');
           }
 
-          const startTime = Date.now();
           let totalSynced = 0;
 
           sendEvent('progress', {
@@ -139,22 +140,25 @@ export async function POST(req: NextRequest) {
             const scoreB = PRODUCT_KEYWORDS.reduce((acc, kw) => acc + (b.toLowerCase().includes(kw) ? 2 : 0), 0);
             return scoreB - scoreA;
           });
-          const sublinks = sortedSublinks.slice(0, maxSubpages);
+          const sublinks = sortedSublinks.slice(offset, offset + maxSubpages);
+          let stoppedEarlyByTimeout = false;
 
           if (sublinks.length > 0) {
-            log('RECURSIVE', `Tổng hợp ${allDiscoveredLinks.length} liên kết toàn site (Sitemap + DOM). Tiến hành bóc tách sâu ${sublinks.length} trang con nghiệp vụ trọng tâm...`, 'info');
+            log('RECURSIVE', `Tổng hợp ${allDiscoveredLinks.length} liên kết toàn site (Sitemap + DOM). Đợt này cào từ link [${offset + 1}] đến [${offset + sublinks.length}]...`, 'info');
             sendEvent('pipeline_step', {
               stepId: 'fetch',
               status: 'processing',
               count: 1 + sublinks.length,
-              message: `Đang quét đệ quy toàn bộ ${sublinks.length} trang con nội bộ...`,
+              message: `Đang quét đệ quy ${sublinks.length} trang con (từ #${offset + 1})...`,
             });
 
             let subIndex = 0;
             for (const subUrl of sublinks) {
-              // Time Guard: Giữ an toàn trong ngưỡng 46s của Vercel Serverless (ngăn ngắt kết nối đột ngột)
-              if (Date.now() - startTime > 46000) {
-                log('WARN', `Đã đạt giới hạn thời gian an toàn của Vercel (46s). Dừng quét thêm để hoàn tất đóng gói dữ liệu an toàn.`, 'warn');
+              // Time Guard: Kiểm tra thời gian thực tế từ khi HTTP connection mở
+              // Ngăn ngắt kết nối đột ngột của Vercel Serverless (ngưỡng 40s an toàn)
+              if (Date.now() - functionStartTime > MAX_SAFE_EXECUTION_MS) {
+                stoppedEarlyByTimeout = true;
+                log('WARN', `Đã đạt giới hạn an toàn 40s của Vercel Serverless. Tự động chốt đợt cào để lưu trọn vẹn ${totalSynced} chunks vào Supabase!`, 'warn');
                 break;
               }
 
@@ -233,9 +237,11 @@ export async function POST(req: NextRequest) {
           sendEvent('progress', {
             percent: 100,
             stage: 'finished',
-            message: `Hoàn tất toàn bộ quy trình! Đã RAG thành công ${totalSynced} chunks vào Supabase.`,
+            message: stoppedEarlyByTimeout
+              ? `Hoàn tất đợt cào an toàn! Đã nạp thành công ${totalSynced} chunks vào Supabase.`
+              : `Hoàn tất toàn bộ quy trình! Đã RAG thành công ${totalSynced} chunks vào Supabase.`,
           });
-          log('FINISHED', `Toàn bộ quy trình hoàn tất 100%. Đã nạp tổng cộng ${totalSynced} chunks vào Supabase.`, 'success');
+          log('FINISHED', `Quy trình cào hoàn tất! Đã nạp thành công ${totalSynced} chunks vào Supabase pgvector.`, 'success');
 
           sendEvent('finished', {
             success: true,
@@ -243,6 +249,10 @@ export async function POST(req: NextRequest) {
             url: mainPage.url,
             totalChunks: totalSynced,
             sublinksCount: allDiscoveredLinks.length,
+            crawledInBatch: sublinks.length,
+            nextOffset: offset + sublinks.length,
+            hasMore: offset + sublinks.length < sortedSublinks.length,
+            stoppedEarlyByTimeout,
           });
 
           controller.close();
