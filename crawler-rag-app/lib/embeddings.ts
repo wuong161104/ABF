@@ -78,4 +78,46 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   throw new Error('Không thể tạo vector embedding 3072 chiều từ Vilao AI hoặc Gemini. Vui lòng kiểm tra OPENAI_API_KEY / VILAO_API_KEY.');
 }
 
+export async function generateBatchEmbeddings(texts: string[]): Promise<number[][]> {
+  if (!texts || texts.length === 0) return [];
+  const cleanTexts = texts.map((t) => t.replace(/\s+/g, ' ').trim().slice(0, 7500)).filter(Boolean);
+  if (cleanTexts.length === 0) return [];
+
+  const vilaoUrl = sanitize(process.env.VILAO_BASE_URL, 'https://api.vilao.ai/v1').replace(/\/+$/, '');
+  const vilaoKey = sanitize(process.env.VILAO_API_KEY || process.env.OPENAI_API_KEY, 'sk-2125a627679b5cadf195b535fa8abe19be75956839f868958bffe263a5612a25');
+  const vilaoModel = sanitize(process.env.VILAO_EMBEDDING_MODEL, 'dg/text-embedding-3-large');
+
+  if (vilaoKey) {
+    try {
+      const resp = await fetch(`${vilaoUrl}/embeddings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${vilaoKey}`,
+        },
+        body: JSON.stringify({
+          model: vilaoModel,
+          input: cleanTexts,
+        }),
+      });
+
+      if (resp.ok) {
+        const json = await resp.json();
+        if (Array.isArray(json.data) && json.data.length === cleanTexts.length) {
+          return json.data.map((item: any) => item.embedding);
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[Vilao AI Batch Embedding Error]: ${err.message}, falling back to single items`);
+    }
+  }
+
+  // Fallback: sequential single generation
+  const results: number[][] = [];
+  for (const text of cleanTexts) {
+    results.push(await generateEmbedding(text));
+  }
+  return results;
+}
+
 export const generateGeminiEmbedding = generateEmbedding;

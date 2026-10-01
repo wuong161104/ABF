@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { crawlSinglePage, chunkTextSemantically, syncChunkToSupabase } from '@/lib/crawler';
+import { crawlSinglePage, chunkTextSemantically, syncChunkToSupabase, syncChunksBatchToSupabase } from '@/lib/crawler';
 
 export const maxDuration = 60; // Allow 60 seconds on Vercel Pro / Functions
 export const dynamic = 'force-dynamic';
@@ -8,8 +8,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { url, instantRag = true } = body;
-    // Default: crawl full website (up to 8 internal pages per execution to fit safely within Vercel 60s limits)
-    const maxSubpages = typeof body.maxPages === 'number' && body.maxPages > 0 ? body.maxPages : 8;
+    // Default: recursive full crawl (up to 15 internal pages per execution to stay safely within Vercel limits)
+    const maxSubpages = typeof body.maxPages === 'number' && body.maxPages > 0 ? body.maxPages : 15;
 
     if (!url || !url.startsWith('http')) {
       return new Response(JSON.stringify({ error: 'URL không hợp lệ' }), {
@@ -92,9 +92,16 @@ export async function POST(req: NextRequest) {
           log('CHUNKER', `Trang chính tạo ${mainChunks.length} chunks ngữ cảnh tiêu đề`, 'success');
 
           // 3. Recursive Subpages Crawl (Toàn bộ website)
-          const sublinks = mainPage.sublinks.slice(0, maxSubpages);
+          const PRODUCT_KEYWORDS = ['san-pham', 'the-tin-dung', 'card', 'ca-nhan', 'dich-vu', 'vay', 'tiet-kiem', 'uu-dai', 'bieu-phi', 'lai-suat', 'chi-tiet'];
+          const sortedSublinks = [...mainPage.sublinks].sort((a, b) => {
+            const scoreA = PRODUCT_KEYWORDS.reduce((acc, kw) => acc + (a.toLowerCase().includes(kw) ? 1 : 0), 0);
+            const scoreB = PRODUCT_KEYWORDS.reduce((acc, kw) => acc + (b.toLowerCase().includes(kw) ? 1 : 0), 0);
+            return scoreB - scoreA;
+          });
+          const sublinks = sortedSublinks.slice(0, maxSubpages);
+
           if (sublinks.length > 0) {
-            log('RECURSIVE', `Phát hiện ${mainPage.sublinks.length} link nội bộ. Tiến hành quét đệ quy ${sublinks.length} trang con...`, 'info');
+            log('RECURSIVE', `Phát hiện ${mainPage.sublinks.length} link nội bộ. Đã phân loại & tiến hành quét ${sublinks.length} trang con trọng tâm...`, 'info');
             sendEvent('pipeline_step', {
               stepId: 'fetch',
               status: 'processing',
@@ -140,58 +147,53 @@ export async function POST(req: NextRequest) {
           });
           log('CHUNKER', `Tổng hợp hoàn tất: ${allChunks.length} chunks sẵn sàng RAG`, 'success');
 
-          // 4. Instant RAG: Sync each chunk immediately to Supabase via Vilao AI
+          // 4. Instant RAG: Batch Sync to Supabase via Vilao AI
           if (instantRag && allChunks.length > 0) {
             sendEvent('pipeline_step', {
               stepId: 'embedding',
               status: 'processing',
               message: 'Bắt đầu Instant RAG: Sinh vector 3072 dims qua Vilao AI & Upsert Supabase...',
             });
-            log('VILAO_AI', `Bắt đầu sinh Vector 3072D (dg/text-embedding-3-large) cho ${allChunks.length} chunks...`, 'info');
+            log('VILAO_AI', `Bắt đầu sinh Vector 3072D (dg/text-embedding-3-large) siêu tốc theo Batch cho ${allChunks.length} chunks...`, 'info');
 
-            let syncedCount = 0;
-            for (let i = 0; i < allChunks.length; i++) {
-              const item = allChunks[i];
-              const ragPercent = 40 + Math.round(((i + 1) / allChunks.length) * 58);
-
-              sendEvent('progress', {
-                percent: ragPercent,
-                stage: 'embedding',
-                current: i + 1,
-                total: allChunks.length,
-                message: `Đang Vectorize & Upsert Supabase (${i + 1}/${allChunks.length}): ${item.heading.slice(0, 45)}...`,
-              });
-
-              const syncedChunk = await syncChunkToSupabase(
-                { heading: item.heading, content: item.content },
-                {
-                  url: item.url,
-                  title: item.title,
-                  type: 'web_page',
-                }
-              );
-
-              syncedCount++;
-              log('SUPABASE', `[${syncedCount}/${allChunks.length}] Synced chunk ID #${syncedChunk.id} [${item.heading}] -> pgvector (3072D)`, 'success');
-
-              sendEvent('chunk_synced', {
-                chunk: syncedChunk,
-                progress: { current: syncedCount, total: allChunks.length },
-              });
-            }
+            const syncedChunks = await syncChunksBatchToSupabase(
+              allChunks.map((item) => ({
+                heading: item.heading,
+                content: item.content,
+                url: item.url,
+                title: item.title,
+                type: 'web_page',
+              })),
+              (syncedChunk, current, total) => {
+                const ragPercent = 40 + Math.round((current / total) * 58);
+                const headingText = syncedChunk.heading || 'Nội dung';
+                sendEvent('progress', {
+                  percent: ragPercent,
+                  stage: 'embedding',
+                  current,
+                  total,
+                  message: `Đang Vectorize & Upsert Supabase (${current}/${total}): ${headingText.slice(0, 45)}...`,
+                });
+                log('SUPABASE', `[${current}/${total}] Synced chunk ID #${syncedChunk.id} [${headingText}] -> pgvector (3072D)`, 'success');
+                sendEvent('chunk_synced', {
+                  chunk: syncedChunk,
+                  progress: { current, total },
+                });
+              }
+            );
 
             sendEvent('pipeline_step', {
               stepId: 'embedding',
               status: 'completed',
-              count: syncedCount,
-              message: `Hoàn tất embedding 3072D (Vilao AI) cho ${syncedCount} chunks`,
+              count: syncedChunks.length,
+              message: `Hoàn tất embedding 3072D (Vilao AI) cho ${syncedChunks.length} chunks`,
             });
 
             sendEvent('pipeline_step', {
               stepId: 'supabase',
               status: 'completed',
-              count: syncedCount,
-              message: `Đã đồng bộ trọn vẹn ${syncedCount} bản ghi vào public.documents trên Supabase`,
+              count: syncedChunks.length,
+              message: `Đã đồng bộ trọn vẹn ${syncedChunks.length} bản ghi vào public.documents trên Supabase`,
             });
           }
 

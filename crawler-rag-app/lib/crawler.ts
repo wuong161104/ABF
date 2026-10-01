@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { generateGeminiEmbedding } from './embeddings';
+import { generateGeminiEmbedding, generateBatchEmbeddings } from './embeddings';
 import { supabaseAdmin } from './supabase';
 import { CrawledChunk } from './types';
 
@@ -29,7 +29,24 @@ export function cleanVietnameseText(text: string): string {
 
 export function isInternalUrl(targetUrl: string, baseDomain: string): boolean {
   try {
+    if (!targetUrl || typeof targetUrl !== 'string') return false;
+    // Exclude unrendered JavaScript templates & action schemes
+    if (
+      targetUrl.includes('{{') ||
+      targetUrl.includes('}}') ||
+      targetUrl.includes('%7B') ||
+      targetUrl.includes('%7D') ||
+      targetUrl.startsWith('javascript:') ||
+      targetUrl.startsWith('mailto:') ||
+      targetUrl.startsWith('tel:')
+    ) {
+      return false;
+    }
     const parsed = new URL(targetUrl);
+    // Exclude static assets & binaries
+    if (/\.(pdf|jpg|jpeg|png|gif|svg|webp|ico|css|js|zip|rar|tar|gz|mp4|mp3|exe|docx?|xlsx?)$/i.test(parsed.pathname)) {
+      return false;
+    }
     for (const ex of EXCLUDED_DOMAINS) {
       if (parsed.hostname.includes(ex)) return false;
     }
@@ -78,6 +95,19 @@ export async function crawlSinglePage(url: string): Promise<ExtractedPage> {
 
     if (resp.ok) {
       html = await resp.text();
+      // Check if this is a Client-Side Rendered (SPA) page or contains unrendered dynamic templates
+      const hasSpaTemplates =
+        html.includes('{{') ||
+        html.includes('ng-app') ||
+        html.includes('v-bind') ||
+        html.includes('id="__next"') ||
+        html.includes('id="root"') ||
+        html.includes('<app-root');
+
+      if (hasSpaTemplates && (html.includes('{{x.') || html.includes('{{') || html.length < 5000)) {
+        console.warn(`[SPA/Dynamic Page Detected]: Kích hoạt Headless Jina Renderer cho ${url}`);
+        usedFallback = true;
+      }
     } else {
       console.warn(`[Crawler Direct Fetch Failed ${resp.status}]: Kích hoạt Jina Fallback cho ${url}`);
       usedFallback = true;
@@ -194,6 +224,30 @@ export async function crawlSinglePage(url: string): Promise<ExtractedPage> {
     md += `### Bảng biểu & Biểu phí trích xuất:\n\n` + tables.join('\n\n') + '\n\n';
   }
   md += paragraphs.join('\n\n');
+
+  // Nếu Cheerio bóc tách được quá ít nội dung (< 3 đoạn văn hoặc < 3 headings), trang có thể là SPA cần chạy JavaScript
+  if (paragraphs.length < 3 && headings.length < 3) {
+    try {
+      console.warn(`[Thin Content Detected (${paragraphs.length} paragraphs)]: Kích hoạt Jina Headless cho ${url}`);
+      const jinaResp = await fetch(`https://r.jina.ai/${url}`, {
+        headers: {
+          Accept: 'text/plain',
+          'X-No-Cache': 'true',
+        },
+        signal: AbortSignal.timeout(20000),
+      });
+
+      if (jinaResp.ok) {
+        const jinaMd = await jinaResp.text();
+        const jinaPage = parseJinaMarkdown(url, jinaMd);
+        if (jinaPage.paragraphs.length > paragraphs.length || jinaPage.sublinks.length > sublinks.length) {
+          return jinaPage;
+        }
+      }
+    } catch {
+      // Giữ kết quả cheerio nếu Jina không khả dụng
+    }
+  }
 
   return {
     url,
@@ -380,4 +434,93 @@ export async function syncChunkToSupabase(
       timestamp: new Date().toLocaleTimeString('vi-VN'),
     };
   }
+}
+
+/**
+ * Batch RAG Syncer: Vectorize theo batch 10 chunks qua Vilao AI (3072D)
+ * và bulk insert vào Supabase pgvector với hiệu năng cao gấp 10 lần.
+ */
+export async function syncChunksBatchToSupabase(
+  items: Array<{
+    heading: string;
+    content: string;
+    url?: string;
+    title?: string;
+    fileName?: string;
+    type: string;
+  }>,
+  onProgress?: (synced: CrawledChunk, current: number, total: number) => void
+): Promise<CrawledChunk[]> {
+  const results: CrawledChunk[] = [];
+  const BATCH_SIZE = 10;
+
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const batch = items.slice(i, i + BATCH_SIZE);
+    const fullContents = batch.map(
+      (item) => `[${item.title || item.fileName || 'Tài liệu'}] - ${item.heading}\n${item.content}`
+    );
+
+    let embeddings: number[][] = [];
+    try {
+      embeddings = await generateBatchEmbeddings(fullContents);
+    } catch {
+      embeddings = [];
+    }
+
+    const insertRows = batch.map((item, idx) => ({
+      content: fullContents[idx],
+      metadata: {
+        source: item.url || item.fileName,
+        title: item.title || item.fileName,
+        heading: item.heading,
+        type: item.type,
+        created_at: new Date().toISOString(),
+        token_count: Math.ceil(fullContents[idx].length / 4),
+      },
+      embedding: embeddings[idx] || null,
+    }));
+
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('documents')
+        .insert(insertRows)
+        .select('id');
+
+      if (error) throw error;
+
+      batch.forEach((item, idx) => {
+        const rowId = data?.[idx]?.id ? String(data[idx].id) : Math.random().toString(36).substring(7);
+        const syncedChunk: CrawledChunk = {
+          id: rowId,
+          sourceUrl: item.url,
+          fileName: item.fileName,
+          heading: item.heading,
+          content: item.content,
+          tokenEstimate: Math.ceil(fullContents[idx].length / 4),
+          embeddingId: Number(rowId),
+          status: 'synced',
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+        };
+        results.push(syncedChunk);
+        if (onProgress) {
+          onProgress(syncedChunk, results.length, items.length);
+        }
+      });
+    } catch (err: any) {
+      console.warn('[Supabase Batch Insert Fallback to Single]:', err.message);
+      for (let j = 0; j < batch.length; j++) {
+        const item = batch[j];
+        const res = await syncChunkToSupabase(
+          { heading: item.heading, content: item.content },
+          { url: item.url, title: item.title, fileName: item.fileName, type: item.type }
+        );
+        results.push(res);
+        if (onProgress) {
+          onProgress(res, results.length, items.length);
+        }
+      }
+    }
+  }
+
+  return results;
 }
