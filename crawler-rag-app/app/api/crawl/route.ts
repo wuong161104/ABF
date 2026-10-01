@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { crawlSinglePage, chunkTextSemantically, syncChunkToSupabase, syncChunksBatchToSupabase } from '@/lib/crawler';
+import { crawlSinglePage, fetchSitemapUrls, chunkTextSemantically, syncChunkToSupabase, syncChunksBatchToSupabase } from '@/lib/crawler';
 
 export const maxDuration = 60; // Allow 60 seconds on Vercel Pro / Functions
 export const dynamic = 'force-dynamic';
@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { url, instantRag = true } = body;
-    // Default: recursive full crawl (up to 15 internal pages per execution to stay safely within Vercel limits)
+    // Default: recursive crawl (up to 15 prioritized internal pages per execution to stay safely within Vercel limits)
     const maxSubpages = typeof body.maxPages === 'number' && body.maxPages > 0 ? body.maxPages : 15;
 
     if (!url || !url.startsWith('http')) {
@@ -39,25 +39,35 @@ export async function POST(req: NextRequest) {
           sendEvent('progress', {
             percent: 5,
             stage: 'ingestion',
-            message: `Bắt đầu kết nối mục tiêu: ${url}`,
+            message: `Bắt đầu quét vét cạn liên kết: ${url}`,
           });
 
           sendEvent('pipeline_step', {
             stepId: 'fetch',
             status: 'processing',
-            message: `Đang kết nối và tải toàn bộ DOM: ${url}`,
+            message: `Bắt đầu Phase 1: Quét vét cạn liên kết (Sitemap + DOM Menu)...`,
           });
-          log('CRAWL', `Bắt đầu phân tích trang chủ: ${url}`);
+          log('QUÉT LINK', `Bắt đầu Phase 1: Quét vét cạn toàn bộ liên kết (Sitemap + DOM Menu + Landing)...`, 'info');
 
-          // 1. Crawl main page
+          // 1. Quét Sitemap XML chính thức (như crawler trên GitHub Actions)
+          const sitemapUrls = await fetchSitemapUrls(url, (msg, type) => {
+            log('QUÉT LINK', msg, type || 'info');
+          });
+
+          // 2. Bóc tách DOM trang chính
+          log('CRAWL', `Bắt đầu bóc tách DOM trang chính: ${url}`);
           const mainPage = await crawlSinglePage(url);
           log('CRAWL', `Đã bóc tách trang chính: "${mainPage.title}" (${mainPage.headings.length} headings, ${mainPage.tables.length} bảng biểu)`, 'success');
+
+          // Hợp nhất URL từ Sitemap và DOM
+          const allDiscoveredLinks = Array.from(new Set([...mainPage.sublinks, ...sitemapUrls]));
+          log('SUCCESS', `Tổng kết Phase 1: Khám phá thành công ${allDiscoveredLinks.length} URLs trên toàn bộ website!`, 'success');
 
           sendEvent('pipeline_step', {
             stepId: 'fetch',
             status: 'completed',
-            count: 1,
-            message: `Đã trích xuất trang chính: "${mainPage.title}"`,
+            count: allDiscoveredLinks.length || 1,
+            message: `Đã quét và bóc tách thành công ${allDiscoveredLinks.length} liên kết toàn bộ website (Sitemap + DOM)`,
           });
 
           sendEvent('pipeline_step', {
@@ -92,16 +102,17 @@ export async function POST(req: NextRequest) {
           log('CHUNKER', `Trang chính tạo ${mainChunks.length} chunks ngữ cảnh tiêu đề`, 'success');
 
           // 3. Recursive Subpages Crawl (Toàn bộ website)
-          const PRODUCT_KEYWORDS = ['san-pham', 'the-tin-dung', 'card', 'ca-nhan', 'dich-vu', 'vay', 'tiet-kiem', 'uu-dai', 'bieu-phi', 'lai-suat', 'chi-tiet'];
-          const sortedSublinks = [...mainPage.sublinks].sort((a, b) => {
-            const scoreA = PRODUCT_KEYWORDS.reduce((acc, kw) => acc + (a.toLowerCase().includes(kw) ? 1 : 0), 0);
-            const scoreB = PRODUCT_KEYWORDS.reduce((acc, kw) => acc + (b.toLowerCase().includes(kw) ? 1 : 0), 0);
+          const PRODUCT_KEYWORDS = ['the-tin-dung', 'san-pham', 'card', 'ca-nhan', 'dich-vu', 'vay', 'tiet-kiem', 'uu-dai', 'bieu-phi', 'lai-suat', 'chi-tiet', 'detail'];
+          const candidateLinks = allDiscoveredLinks.filter((l) => l !== mainPage.url && l !== url);
+          const sortedSublinks = candidateLinks.sort((a, b) => {
+            const scoreA = PRODUCT_KEYWORDS.reduce((acc, kw) => acc + (a.toLowerCase().includes(kw) ? 2 : 0), 0);
+            const scoreB = PRODUCT_KEYWORDS.reduce((acc, kw) => acc + (b.toLowerCase().includes(kw) ? 2 : 0), 0);
             return scoreB - scoreA;
           });
           const sublinks = sortedSublinks.slice(0, maxSubpages);
 
           if (sublinks.length > 0) {
-            log('RECURSIVE', `Phát hiện ${mainPage.sublinks.length} link nội bộ. Đã phân loại & tiến hành quét ${sublinks.length} trang con trọng tâm...`, 'info');
+            log('RECURSIVE', `Tổng hợp ${allDiscoveredLinks.length} liên kết toàn site (Sitemap + DOM). Tiến hành bóc tách sâu ${sublinks.length} trang con nghiệp vụ trọng tâm...`, 'info');
             sendEvent('pipeline_step', {
               stepId: 'fetch',
               status: 'processing',

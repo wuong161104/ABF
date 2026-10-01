@@ -67,6 +67,121 @@ export interface ExtractedPage {
   markdown: string;
 }
 
+/**
+ * Phase 1 Universal Link Discovery (Sitemap + Robots.txt)
+ * Tương thích 100% với logic Phase 1 của abf_project/deep_web_crawler.py
+ * Quét vét cạn sitemap index, products, news, categories.
+ */
+export async function fetchSitemapUrls(
+  targetUrl: string,
+  onLog?: (msg: string, type?: 'info' | 'success' | 'warn') => void
+): Promise<string[]> {
+  const urlsFound: string[] = [];
+  const visitedSitemaps = new Set<string>();
+
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return [];
+  }
+
+  const origin = parsed.origin;
+  const baseDomain = parsed.hostname;
+
+  const sitemapCandidates = [
+    `${origin}/robots.txt`,
+    `${origin}/sitemap.xml`,
+    `${origin}/sitemap_index.xml`,
+    `${origin}/sitemap-index.xml`,
+    `${origin}/sitemap/sitemap.xml`,
+    `${origin}/SiteMap/sitemap.xml`,
+  ];
+
+  // 1. Kiểm tra robots.txt để tìm sitemap links chính thức
+  try {
+    const robotsRes = await fetch(`${origin}/robots.txt`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (robotsRes.ok) {
+      const robotsTxt = await robotsRes.text();
+      for (const line of robotsTxt.split(/\r?\n/)) {
+        if (line.trim().toLowerCase().startsWith('sitemap:')) {
+          const smUrl = line.split(/:\s*/)[1]?.trim();
+          if (smUrl && !sitemapCandidates.includes(smUrl)) {
+            sitemapCandidates.unshift(smUrl);
+          }
+        }
+      }
+    }
+  } catch {
+    // Ignore robots.txt error
+  }
+
+  // 2. Duyệt qua hàng đợi sitemap (hỗ trợ cả sitemap lồng nhau sitemapindex)
+  const queue = [...sitemapCandidates];
+  const MAX_SITEMAPS_TO_CRAWL = 20;
+
+  while (queue.length > 0 && visitedSitemaps.size < MAX_SITEMAPS_TO_CRAWL) {
+    const smUrl = queue.shift()!;
+    if (visitedSitemaps.has(smUrl)) continue;
+    visitedSitemaps.add(smUrl);
+
+    if (smUrl.endsWith('robots.txt')) continue;
+
+    try {
+      const res = await fetch(smUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'application/xml, text/xml, */*',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!res.ok) continue;
+      const xmlText = await res.text();
+      if (!xmlText.trim()) continue;
+
+      const locMatches = Array.from(xmlText.matchAll(/<loc>(.*?)<\/loc>/gi)).map((m) => m[1].trim());
+      if (locMatches.length === 0) continue;
+
+      if (onLog) {
+        onLog(`-> Đọc thành công Sitemap '${smUrl}': phát hiện ${locMatches.length} liên kết / mục con.`, 'info');
+      }
+
+      for (const loc of locMatches) {
+        if (!loc) continue;
+        const cleanLoc = loc.trim();
+        // Nếu là sitemap con
+        if (
+          cleanLoc.endsWith('.xml') ||
+          (cleanLoc.toLowerCase().includes('sitemap') && !cleanLoc.endsWith('.html') && !cleanLoc.endsWith('.htm'))
+        ) {
+          if (!visitedSitemaps.has(cleanLoc) && !queue.includes(cleanLoc)) {
+            queue.push(cleanLoc);
+          }
+        } else {
+          if (isInternalUrl(cleanLoc, baseDomain)) {
+            urlsFound.push(cleanLoc);
+          }
+        }
+      }
+    } catch {
+      // Bỏ qua lỗi sitemap lẻ
+    }
+  }
+
+  const uniqueUrls = Array.from(new Set(urlsFound));
+  if (uniqueUrls.length > 0 && onLog) {
+    onLog(`✨ Tìm thấy tổng cộng ${uniqueUrls.length} URL từ Sitemap chính thức của website!`, 'success');
+  }
+  return uniqueUrls;
+}
+
 export async function crawlSinglePage(url: string): Promise<ExtractedPage> {
   const browserHeaders = {
     'User-Agent':
