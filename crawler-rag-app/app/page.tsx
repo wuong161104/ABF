@@ -14,13 +14,17 @@ import {
   Eye,
   FileUp,
   Terminal,
-  Copy,
   Cloud,
   Play,
   ExternalLink,
   Clock,
   Server,
-  ArrowRight
+  Layers,
+  Send,
+  Trash2,
+  ShieldCheck,
+  ChevronRight,
+  Info
 } from 'lucide-react';
 import { CrawledChunk } from '@/lib/types';
 
@@ -32,13 +36,12 @@ interface LogEntry {
 }
 
 export default function Home() {
-  // Navigation: 2 clean modes
+  // Navigation: Data Source tab
   const [activeSourceTab, setActiveSourceTab] = useState<'cloud' | 'documents'>('cloud');
-  const [activeBottomTab, setActiveBottomTab] = useState<'query' | 'supabase' | 'logs'>('query');
 
-  // Cloud Crawler input state
+  // Cloud Crawler state
   const [targetUrl, setTargetUrl] = useState('https://mbbank.com.vn/');
-  const [cloudMaxPages, setCloudMaxPages] = useState('0'); // '0' = cào 100% sitemap
+  const [cloudMaxPages, setCloudMaxPages] = useState('0'); // '0' = all sitemap
   const [cloudForceRecrawl, setCloudForceRecrawl] = useState(false);
   const [isTriggeringCloud, setIsTriggeringCloud] = useState(false);
   const [cloudStatus, setCloudStatus] = useState<any>(null);
@@ -50,12 +53,18 @@ export default function Home() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [enableVisionOcr, setEnableVisionOcr] = useState(true);
   const [isProcessingDoc, setIsProcessingDoc] = useState(false);
-
-  // Logs & sync chunks
-  const [syncedChunks, setSyncedChunks] = useState<CrawledChunk[]>([]);
-  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [progressPercent, setProgressPercent] = useState<number>(0);
   const [progressMessage, setProgressMessage] = useState<string>('');
+
+  // Logs & sync chunks
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([
+    {
+      timestamp: new Date().toLocaleTimeString('vi-VN'),
+      tag: 'SYSTEM',
+      message: 'ABF Knowledge Studio sẵn sàng hoạt động. Kết nối Supabase pgvector 3072D.',
+      type: 'info',
+    },
+  ]);
 
   // Supabase stats
   const [dbStats, setDbStats] = useState({ totalChunks: 0, recentRecords: [] as any[] });
@@ -67,15 +76,16 @@ export default function Home() {
   const [queryResult, setQueryResult] = useState<{ answer: string; matchedChunks: any[] } | null>(null);
 
   const streamEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load stats and cloud status on mount + polling
+  // Initial load + interval polling
   useEffect(() => {
     fetchStats();
     fetchCloudStatus();
     const interval = setInterval(() => {
       fetchCloudStatus();
       fetchStats();
-    }, 10000);
+    }, 12000);
     return () => clearInterval(interval);
   }, []);
 
@@ -119,10 +129,28 @@ export default function Home() {
         throw new Error(data.error || 'Lỗi khi kích hoạt Cloud Runner');
       }
       setCloudSuccessMsg(data.message);
+      setLogEntries((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'CLOUD_TRIGGER',
+          message: `Đã kích hoạt Cloud Runner cho ${targetUrl} (Run #${data.runId || 'mới'})`,
+          type: 'success',
+        },
+      ]);
       fetchCloudStatus();
       fetchStats();
     } catch (err: any) {
       setCloudErrorMsg(err.message);
+      setLogEntries((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'ERROR',
+          message: err.message,
+          type: 'error',
+        },
+      ]);
     } finally {
       setIsTriggeringCloud(false);
     }
@@ -140,19 +168,17 @@ export default function Home() {
         });
       }
     } catch (e) {
-      console.error('Error fetching stats:', e);
+      console.error('Lỗi nạp thống kê Supabase:', e);
     } finally {
       setIsLoadingStats(false);
     }
   };
 
-  // Trigger Document Ingestion Pipeline
   const handleUploadDocument = async () => {
     if (!selectedFile) return;
     setIsProcessingDoc(true);
-    setActiveBottomTab('logs');
-    setProgressPercent(10);
-    setProgressMessage(`Đang nạp tệp: ${selectedFile.name}...`);
+    setProgressPercent(20);
+    setProgressMessage(`Đang đọc tệp ${selectedFile.name}...`);
 
     try {
       const formData = new FormData();
@@ -163,7 +189,7 @@ export default function Home() {
         ...prev,
         {
           timestamp: new Date().toLocaleTimeString('vi-VN'),
-          tag: 'DOC_UPLOAD',
+          tag: 'INGEST',
           message: `Nạp tệp ${selectedFile.name} (${(selectedFile.size / 1024).toFixed(1)} KB)...`,
           type: 'info',
         },
@@ -199,9 +225,8 @@ export default function Home() {
         },
       ]);
 
-      if (Array.isArray(result.chunks)) {
-        setSyncedChunks(result.chunks);
-      }
+      setSelectedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       fetchStats();
     } catch (err: any) {
       setProgressPercent(100);
@@ -220,15 +245,17 @@ export default function Home() {
     }
   };
 
-  // Trigger RAG Query
-  const handleRunQuery = async () => {
-    if (!queryInput.trim()) return;
+  const handleRunQuery = async (customPrompt?: string) => {
+    const q = customPrompt !== undefined ? customPrompt : queryInput;
+    if (!q.trim()) return;
+    if (customPrompt) setQueryInput(customPrompt);
+
     setIsQuerying(true);
     try {
       const resp = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: queryInput.trim() }),
+        body: JSON.stringify({ question: q.trim() }),
       });
       const data = await resp.json();
       if (data.success) {
@@ -236,573 +263,540 @@ export default function Home() {
           answer: data.answer,
           matchedChunks: data.matchedChunks || [],
         });
+        setLogEntries((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString('vi-VN'),
+            tag: 'RAG_QUERY',
+            message: `Hỏi đáp RAG thành công (${data.matchedChunks?.length || 0} chunks khớp)`,
+            type: 'info',
+          },
+        ]);
+      } else {
+        throw new Error(data.error || 'Không thể truy vấn RAG');
       }
     } catch (err: any) {
-      console.error('Lỗi truy vấn RAG:', err);
+      setLogEntries((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString('vi-VN'),
+          tag: 'ERROR',
+          message: err.message,
+          type: 'error',
+        },
+      ]);
     } finally {
       setIsQuerying(false);
     }
   };
 
+  const sampleQuestions = [
+    'Thẻ tín dụng VPBank MWG hoàn tiền bao nhiêu %?',
+    'Điều kiện mở thẻ tín dụng VIB Online Plus?',
+    'Biểu phí thường niên thẻ tín dụng MBBank?',
+  ];
+
   return (
-    <main className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
-      {/* Top Header */}
-      <header className="border-b border-slate-200/80 bg-white/90 backdrop-blur-md sticky top-0 z-50 px-4 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 text-white">
-            <Zap className="w-5 h-5 fill-white" />
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 font-sans selection:bg-blue-100 selection:text-blue-900 flex flex-col">
+      {/* 1. KHỐI HEADER + KPIS HỆ THỐNG GHIM TRÊN CÙNG */}
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-sm border-b border-slate-200/80 px-4 sm:px-6 lg:px-8 py-3.5 shadow-sm">
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+          
+          {/* Logo & Tiêu đề */}
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-sm shadow-blue-500/25">
+              <Layers className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-base font-bold tracking-tight text-slate-900">ABF Knowledge Studio</h1>
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200/80">
+                  RAG 3072D
+                </span>
+              </div>
+              <p className="text-xs text-slate-500">Trung tâm thu thập dữ liệu & kiểm thử RAG Thẻ Ngân Hàng</p>
+            </div>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-base font-bold tracking-tight text-slate-900">
-                ABF Crawler &amp; Knowledge Hub
-              </h1>
-              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                Cloud Runner
+
+          {/* 3 Thẻ Chỉ Số Nhanh (System KPIs) */}
+          <div className="flex items-center gap-4 text-xs">
+            {/* KPI 1: Cloud Runner */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200/80">
+              <span className={`w-2 h-2 rounded-full ${
+                cloudStatus?.latestRun?.status === 'in_progress' ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'
+              }`}></span>
+              <span className="text-slate-500">Cloud Runner:</span>
+              <span className="font-semibold text-slate-800">
+                {cloudStatus?.latestRun ? `Run #${cloudStatus.latestRun.runNumber}` : 'Sẵn sàng'}
               </span>
             </div>
-            <p className="text-xs text-slate-500">
-              Thu thập dữ liệu website tự động &amp; Nạp tài liệu thông minh
-            </p>
-          </div>
-        </div>
 
-        {/* Status Indicators */}
-        <div className="flex items-center gap-2.5 text-xs">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium">
-            <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            <Database className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Supabase: {dbStats.totalChunks.toLocaleString()} Chunks</span>
-          </div>
+            {/* KPI 2: Supabase Chunks */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200/80">
+              <Database className="w-3.5 h-3.5 text-blue-600" />
+              <span className="text-slate-500">Supabase:</span>
+              <span className="font-semibold text-slate-800">
+                {dbStats.totalChunks.toLocaleString()} Chunks
+              </span>
+            </div>
 
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-slate-700 font-medium">
-            <Server className="w-3.5 h-3.5 text-slate-500" />
-            <span>
-              {cloudStatus?.isRunning ? 'Cloud: Đang chạy' : 'Cloud: Sẵn sàng'}
-            </span>
+            {/* KPI 3: Gemini Vision Model */}
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200/80">
+              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+              <span className="text-slate-500">Model:</span>
+              <span className="font-semibold text-slate-800">Gemini 1.5 Flash Vision</span>
+            </div>
           </div>
 
-          <button
-            onClick={() => {
-              fetchStats();
-              fetchCloudStatus();
-            }}
-            disabled={isLoadingStats || isPollingCloud}
-            className="p-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 text-slate-500 hover:text-slate-800 transition shadow-sm"
-            title="Làm mới trạng thái"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingStats || isPollingCloud ? 'animate-spin' : ''}`} />
-          </button>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <div className="flex-1 max-w-6xl w-full mx-auto p-4 lg:p-6 space-y-6">
+      {/* 2. KHÔNG GIAN LÀM VIỆC CHÍNH (LAYOUT 2 CỘT SPLIT WORKBENCH) */}
+      <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 flex-1">
+        <div className="grid grid-cols-12 gap-6 items-start">
 
-        {/* 1. MAIN INGESTION COMMAND CENTER */}
-        <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-5">
-          {/* Ingestion Mode Toggle Tabs */}
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-            <button
-              onClick={() => setActiveSourceTab('cloud')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition ${
-                activeSourceTab === 'cloud'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Cloud className="w-4 h-4" />
-              <span>Cào Ngầm Toàn Bộ Website (Cloud Runner 6h)</span>
-              {cloudStatus?.isRunning && (
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping ml-1" />
-              )}
-            </button>
-
-            <button
-              onClick={() => setActiveSourceTab('documents')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition ${
-                activeSourceTab === 'documents'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <FileUp className="w-4 h-4" />
-              <span>Nạp Tài Liệu &amp; PDF (Vision OCR)</span>
-            </button>
-          </div>
-
-          {/* TAB 1: CLOUD RUNNER */}
-          {activeSourceTab === 'cloud' && (
-            <div className="space-y-4">
-              {/* Presets and URL Input */}
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <label className="text-xs font-semibold text-slate-700">
-                    Đường dẫn Website mục tiêu:
-                  </label>
-                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                    <span className="text-slate-400">Gợi ý:</span>
-                    {[
-                      { label: 'MBBank', url: 'https://mbbank.com.vn/' },
-                      { label: 'VPBank Thẻ', url: 'https://www.vpbank.com.vn/ca-nhan/dich-vu-the' },
-                      { label: 'VIB Thẻ', url: 'https://www.vib.com.vn/vn/the-tin-dung' },
-                      { label: 'Techcombank', url: 'https://techcombank.com/khach-hang-ca-nhan/the' },
-                    ].map((p) => (
-                      <button
-                        key={p.label}
-                        onClick={() => setTargetUrl(p.url)}
-                        className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
-                      >
-                        {p.label}
-                      </button>
-                    ))}
-                  </div>
+          {/* ==================== CỘT TRÁI: DATA INGESTION HUB (5 CỘT) ==================== */}
+          <div className="col-span-12 lg:col-span-5 space-y-5">
+            
+            {/* Khối Nguồn Dữ Liệu */}
+            <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+              
+              {/* Header Khối & Tab chuyển đổi */}
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <span className="font-semibold text-sm text-slate-800 flex items-center gap-2">
+                  <Cloud className="w-4 h-4 text-blue-600" /> Nạp Dữ Liệu Ngân Hàng
+                </span>
+                
+                {/* Segmented Control */}
+                <div className="inline-flex bg-slate-100 p-0.5 rounded-lg text-xs">
+                  <button
+                    onClick={() => setActiveSourceTab('cloud')}
+                    className={`px-3 py-1.5 rounded-md font-medium transition-all ${
+                      activeSourceTab === 'cloud'
+                        ? 'bg-white text-slate-900 shadow-sm font-semibold'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    Cloud Crawler
+                  </button>
+                  <button
+                    onClick={() => setActiveSourceTab('documents')}
+                    className={`px-3 py-1.5 rounded-md font-medium transition-all ${
+                      activeSourceTab === 'documents'
+                        ? 'bg-white text-slate-900 shadow-sm font-semibold'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    Tài Liệu PDF / OCR
+                  </button>
                 </div>
-
-                <input
-                  type="url"
-                  value={targetUrl}
-                  onChange={(e) => setTargetUrl(e.target.value)}
-                  placeholder="https://..."
-                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
-                />
               </div>
 
-              {/* Options */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                  <label className="text-xs font-semibold text-slate-700 block mb-1">
-                    Số trang tối đa (max_pages):
-                  </label>
-                  <select
-                    value={cloudMaxPages}
-                    onChange={(e) => setCloudMaxPages(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="0">0 (Cào toàn bộ 100% website - Khuyến nghị)</option>
-                    <option value="50">50 trang</option>
-                    <option value="100">100 trang</option>
-                    <option value="500">500 trang</option>
-                    <option value="1000">1.000 trang</option>
-                  </select>
-                </div>
-
-                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between">
+              {/* TAB 1: CLOUD CRAWLER */}
+              {activeSourceTab === 'cloud' && (
+                <div className="space-y-4 pt-1">
                   <div>
-                    <span className="text-xs font-semibold text-slate-700 block">Lưu trữ Supabase:</span>
-                    <span className="text-xs text-emerald-600 font-medium">pgvector (3072D) tự động</span>
-                  </div>
-                  <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-600">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      URL Ngân hàng / Website mục tiêu
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={cloudForceRecrawl}
-                      onChange={(e) => setCloudForceRecrawl(e.target.checked)}
-                      className="rounded border-slate-300 text-blue-600 focus:ring-0"
+                      type="url"
+                      value={targetUrl}
+                      onChange={(e) => setTargetUrl(e.target.value)}
+                      placeholder="https://mbbank.com.vn/"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                     />
-                    <span>Cào lại từ đầu</span>
-                  </label>
-                </div>
-              </div>
+                  </div>
 
-              {/* Action Button & Direct Links */}
-              <div className="flex flex-wrap items-center gap-3 pt-2">
-                <button
-                  onClick={handleTriggerCloudCrawler}
-                  disabled={isTriggeringCloud}
-                  className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center gap-2 shadow-sm transition disabled:opacity-50"
-                >
-                  {isTriggeringCloud ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Đang kích hoạt máy chủ...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4 fill-white" />
-                      <span>Bắt Đầu Cào Ngầm Trên Cloud (6 Tiếng)</span>
-                    </>
-                  )}
-                </button>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Giới hạn trang (0 = tất cả)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={cloudMaxPages}
+                        onChange={(e) => setCloudMaxPages(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Chế độ cào
+                      </label>
+                      <select
+                        value={cloudForceRecrawl ? 'force' : 'incremental'}
+                        onChange={(e) => setCloudForceRecrawl(e.target.value === 'force')}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                      >
+                        <option value="incremental">Quét bài mới (Incremental)</option>
+                        <option value="force">Cào lại toàn bộ (Recrawl)</option>
+                      </select>
+                    </div>
+                  </div>
 
-                {cloudStatus?.latestRun?.htmlUrl && (
-                  <a
-                    href={cloudStatus.latestRun.htmlUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-4 py-2.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium flex items-center gap-1.5 transition shadow-sm"
+                  {/* Nút Kích Hoạt Cào Ngầm */}
+                  <button
+                    onClick={handleTriggerCloudCrawler}
+                    disabled={isTriggeringCloud || !targetUrl}
+                    className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-sm shadow-blue-500/20 transition-all cursor-pointer"
                   >
-                    <span>Xem Log GitHub Actions</span>
-                    <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-                  </a>
-                )}
-              </div>
+                    {isTriggeringCloud ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang gửi lệnh Cloud Runner...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3.5 h-3.5 fill-white" /> Kích Hoạt Cào Ngầm Trên Cloud
+                      </>
+                    )}
+                  </button>
 
-              {/* Status Notifications */}
-              {cloudSuccessMsg && (
-                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>{cloudSuccessMsg}</span>
-                </div>
-              )}
+                  {/* Thông báo kết quả Cloud Trigger */}
+                  {cloudSuccessMsg && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200/80 rounded-xl text-xs text-emerald-800 flex items-start gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <span>{cloudSuccessMsg}</span>
+                    </div>
+                  )}
+                  {cloudErrorMsg && (
+                    <div className="p-3 bg-red-50 border border-red-200/80 rounded-xl text-xs text-red-800 flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      <span>{cloudErrorMsg}</span>
+                    </div>
+                  )}
 
-              {cloudErrorMsg && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span>{cloudErrorMsg}</span>
-                </div>
-              )}
-
-              {/* Cloud Status Banner */}
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-2">
-                  <Server className="w-4 h-4 text-slate-500" />
-                  <span className="font-semibold text-slate-700">Trạng thái máy chủ:</span>
-                  {cloudStatus?.isRunning ? (
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-medium flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-                      Đang cào ngầm (Run #{cloudStatus?.latestRun?.runNumber})
-                    </span>
-                  ) : (
-                    <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-700 font-medium">
-                      Sẵn sàng nhận lệnh
-                    </span>
+                  {/* Thông tin Runner lần chạy gần nhất */}
+                  {cloudStatus?.latestRun && (
+                    <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">Tiến trình gần nhất:</span>
+                        <a
+                          href={cloudStatus.latestRun.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-semibold text-blue-600 hover:underline flex items-center gap-1"
+                        >
+                          Run #{cloudStatus.latestRun.runNumber} <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">Trạng thái:</span>
+                        <span className={`font-semibold capitalize ${
+                          cloudStatus.latestRun.status === 'completed'
+                            ? 'text-emerald-700'
+                            : cloudStatus.latestRun.status === 'in_progress'
+                            ? 'text-amber-600'
+                            : 'text-slate-700'
+                        }`}>
+                          {cloudStatus.latestRun.status === 'completed' ? 'Hoàn thành' : 'Đang xử lý ngầm...'}
+                        </span>
+                      </div>
+                      {cloudStatus.latestRun.conclusion && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500">Kết luận:</span>
+                          <span className="font-semibold text-slate-800 uppercase text-[11px]">
+                            {cloudStatus.latestRun.conclusion}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
+              )}
 
-                {cloudStatus?.latestRun && (
-                  <div className="flex items-center gap-3 text-slate-500">
-                    <span>Lần chạy gần nhất: {new Date(cloudStatus.latestRun.createdAt).toLocaleTimeString('vi-VN')}</span>
-                    <a
-                      href={cloudStatus.latestRun.htmlUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-blue-600 hover:underline flex items-center gap-1"
-                    >
-                      <span>Xem tiến trình</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
+              {/* TAB 2: TÀI LIỆU PDF / VISION OCR */}
+              {activeSourceTab === 'documents' && (
+                <div className="space-y-4 pt-1">
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
+                      selectedFile
+                        ? 'border-blue-500 bg-blue-50/50'
+                        : 'border-slate-200 hover:border-slate-300 bg-slate-50/60'
+                    }`}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,.txt,.md"
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files[0]) {
+                          setSelectedFile(e.target.files[0]);
+                        }
+                      }}
+                      className="hidden"
+                    />
+                    <FileUp className="w-8 h-8 text-blue-600 mx-auto mb-2" />
+                    {selectedFile ? (
+                      <div>
+                        <div className="text-xs font-bold text-slate-800">{selectedFile.name}</div>
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {(selectedFile.size / 1024).toFixed(1)} KB — Sẵn sàng nạp
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="text-xs font-semibold text-slate-700">Kéo thả hoặc click để chọn tệp</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          Hỗ trợ thể lệ PDF, điều khoản hoàn tiền, text scan
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
-          )}
 
-          {/* TAB 2: DOCUMENTS */}
-          {activeSourceTab === 'documents' && (
-            <div className="space-y-4">
-              <div
-                className="border-2 border-dashed border-slate-200 hover:border-blue-400 bg-slate-50/50 rounded-2xl p-8 text-center transition cursor-pointer"
-                onClick={() => document.getElementById('docFileInput')?.click()}
-              >
-                <input
-                  id="docFileInput"
-                  type="file"
-                  accept=".pdf,.docx,.txt,.md"
-                  className="hidden"
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files[0]) {
-                      setSelectedFile(e.target.files[0]);
-                    }
-                  }}
-                />
-                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto mb-2 border border-blue-100">
-                  <FileText className="w-5 h-5" />
+                  <div className="flex items-center justify-between text-xs">
+                    <label className="flex items-center gap-2 text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={enableVisionOcr}
+                        onChange={(e) => setEnableVisionOcr(e.target.checked)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>Bóc tách thị giác Gemini Vision OCR</span>
+                    </label>
+                  </div>
+
+                  {/* Tiến độ upload */}
+                  {isProcessingDoc && (
+                    <div className="space-y-1.5">
+                      <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="bg-blue-600 h-full transition-all duration-300"
+                          style={{ width: `${progressPercent}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-[11px] text-slate-500 text-center font-medium">{progressMessage}</p>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleUploadDocument}
+                    disabled={isProcessingDoc || !selectedFile}
+                    className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                  >
+                    {isProcessingDoc ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang phân tích PDF...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Bắt Đầu Nạp Vào Supabase
+                      </>
+                    )}
+                  </button>
                 </div>
-                {selectedFile ? (
-                  <div>
-                    <p className="text-sm font-semibold text-slate-800">{selectedFile.name}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {(selectedFile.size / 1024).toFixed(1)} KB • Nhấn để thay đổi tệp
-                    </p>
-                  </div>
-                ) : (
-                  <div>
-                    <p className="text-sm font-semibold text-slate-800">
-                      Chọn hoặc kéo thả tệp PDF / DOCX / TXT vào đây
-                    </p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Hỗ trợ đọc văn bản và bảng biểu tự động
-                    </p>
-                  </div>
-                )}
-              </div>
+              )}
 
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={enableVisionOcr}
-                    onChange={(e) => setEnableVisionOcr(e.target.checked)}
-                    className="rounded border-slate-300 text-blue-600 focus:ring-0"
-                  />
-                  <span>Nhận diện điểm ảnh &amp; bảng biểu qua Gemini Vision</span>
-                </label>
+            </section>
 
+            {/* Khối Nhật Ký Hoạt Động (Live Terminal Console) */}
+            <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm space-y-2 text-xs font-mono">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2 text-[11px]">
+                <span className="flex items-center gap-1.5 text-slate-400 font-semibold">
+                  <Terminal className="w-3.5 h-3.5 text-blue-400" /> Nhật Ký Xử Lý Live
+                </span>
                 <button
-                  onClick={handleUploadDocument}
-                  disabled={!selectedFile || isProcessingDoc}
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center gap-2 transition disabled:opacity-50 shadow-sm"
+                  onClick={() => setLogEntries([])}
+                  className="text-slate-500 hover:text-slate-300 text-[11px] flex items-center gap-1"
                 >
-                  {isProcessingDoc ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Đang phân tích &amp; nạp...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>Phân Tích &amp; Nạp Vào Supabase</span>
-                    </>
-                  )}
+                  <Trash2 className="w-3 h-3" /> Xóa
                 </button>
               </div>
-            </div>
-          )}
-        </section>
 
-        {/* 2. RESULTS & KNOWLEDGE SECTION */}
-        <section className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col min-h-[460px]">
-          {/* Sub Navigation Bar */}
-          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2 bg-slate-50/50">
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => setActiveBottomTab('query')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  activeBottomTab === 'query'
-                    ? 'bg-white text-blue-700 border border-slate-200 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Search className="w-3.5 h-3.5 text-blue-600" />
-                <span>Hỏi Đáp RAG Sandbox</span>
-              </button>
+              <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1 text-[11px] scrollbar-thin">
+                {logEntries.map((log, idx) => (
+                  <div key={idx} className="flex items-start gap-2 leading-relaxed">
+                    <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
+                    <span className={`px-1 rounded text-[10px] uppercase font-bold shrink-0 ${
+                      log.type === 'error'
+                        ? 'bg-red-950 text-red-400'
+                        : log.type === 'success'
+                        ? 'bg-emerald-950 text-emerald-400'
+                        : 'bg-slate-800 text-blue-400'
+                    }`}>
+                      {log.tag}
+                    </span>
+                    <span className={`break-words ${
+                      log.type === 'error' ? 'text-red-300' : log.type === 'success' ? 'text-emerald-300' : 'text-slate-300'
+                    }`}>
+                      {log.message}
+                    </span>
+                  </div>
+                ))}
+                <div ref={streamEndRef} />
+              </div>
+            </section>
 
-              <button
-                onClick={() => {
-                  setActiveBottomTab('supabase');
-                  fetchStats();
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  activeBottomTab === 'supabase'
-                    ? 'bg-white text-emerald-700 border border-slate-200 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Database className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Kho Dữ Liệu Supabase ({dbStats.totalChunks})</span>
-              </button>
-
-              <button
-                onClick={() => setActiveBottomTab('logs')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  activeBottomTab === 'logs'
-                    ? 'bg-white text-slate-800 border border-slate-200 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Terminal className="w-3.5 h-3.5 text-slate-500" />
-                <span>Nhật Ký Xử Lý ({logEntries.length})</span>
-              </button>
-            </div>
-
-            <div className="text-[11px] text-slate-500 font-medium">
-              Vector: <span className="font-semibold text-slate-700">3072 chiều (Vilao AI)</span>
-            </div>
           </div>
 
-          {/* TAB 1: RAG QUERY SANDBOX */}
-          {activeBottomTab === 'query' && (
-            <div className="p-5 flex-1 flex flex-col space-y-4">
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={queryInput}
-                  onChange={(e) => setQueryInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleRunQuery()}
-                  placeholder="Nhập câu hỏi để kiểm tra dữ liệu trong Supabase (Ví dụ: Thẻ tín dụng MB ưu đãi gì?)..."
-                  className="flex-1 bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                />
+          {/* ==================== CỘT PHẢI: RAG PLAYGROUND & SUPABASE INSPECTOR (7 CỘT) ==================== */}
+          <div className="col-span-12 lg:col-span-7 space-y-5">
+            
+            {/* Khối Sân Thử Nghiệm Truy Vấn RAG */}
+            <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div>
+                  <h2 className="font-semibold text-sm text-slate-900 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-blue-600" /> RAG Query Sandbox (Kiểm Thử Hỏi Đáp)
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Đặt câu hỏi để kiểm tra độ chính xác và trích dẫn nguồn của AI</p>
+                </div>
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                  Cosine Similarity
+                </span>
+              </div>
+
+              {/* Ô Nhập Câu Hỏi */}
+              <div className="space-y-2.5">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={queryInput}
+                    onChange={(e) => setQueryInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleRunQuery()}
+                    placeholder="Nhập câu hỏi về ưu đãi thẻ tín dụng, điều kiện hoàn tiền..."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-4 pr-24 py-3 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                  />
+                  <button
+                    onClick={() => handleRunQuery()}
+                    disabled={isQuerying || !queryInput.trim()}
+                    className="absolute right-2 top-2 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                  >
+                    {isQuerying ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                    <span>Hỏi</span>
+                  </button>
+                </div>
+
+                {/* Gợi Ý Câu Hỏi Mẫu */}
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="text-slate-400 text-[11px]">Gợi ý:</span>
+                  {sampleQuestions.map((sq, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => handleRunQuery(sq)}
+                      className="px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-blue-50 text-slate-600 hover:text-blue-700 border border-slate-200/80 hover:border-blue-200 text-[11px] transition-all cursor-pointer"
+                    >
+                      {sq}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Hộp Hiển Thị Kết Quả RAG */}
+              {queryResult && (
+                <div className="p-4 bg-slate-50 border border-slate-200/90 rounded-xl space-y-3.5 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between border-b border-slate-200/70 pb-2">
+                    <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-500" /> Câu Trả Lời Của Bot RAG
+                    </span>
+                    <span className="text-[11px] text-slate-400 font-mono">Top-k: {queryResult.matchedChunks?.length || 0} Chunks</span>
+                  </div>
+
+                  {/* Nội dung câu trả lời */}
+                  <div className="text-xs text-slate-800 leading-relaxed whitespace-pre-wrap">
+                    {queryResult.answer}
+                  </div>
+
+                  {/* Danh Sách Nguồn Trích Dẫn (Citations) */}
+                  {queryResult.matchedChunks && queryResult.matchedChunks.length > 0 && (
+                    <div className="border-t border-slate-200/80 pt-3 space-y-2">
+                      <div className="text-[11px] font-semibold text-slate-600 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Nguồn trích dẫn đối chiếu từ Supabase:
+                      </div>
+                      <div className="space-y-1.5">
+                        {queryResult.matchedChunks.map((chunk, cIdx) => (
+                          <div key={cIdx} className="p-2.5 bg-white border border-slate-200 rounded-lg text-xs space-y-1">
+                            <div className="flex justify-between items-center font-medium text-slate-800">
+                              <span className="truncate max-w-sm text-[11px] text-blue-700">
+                                📄 {chunk.metadata?.title || chunk.metadata?.fileName || 'Tài liệu'}
+                              </span>
+                              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
+                                Sim: {(chunk.similarity ? (chunk.similarity * 100).toFixed(1) : '90')}%
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 line-clamp-2 italic">
+                              "{chunk.content}"
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+
+            {/* Khối Thanh Tra Dữ Liệu Supabase (Vector Inspector) */}
+            <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-blue-600" />
+                  <h3 className="font-semibold text-sm text-slate-900">
+                    Bản Ghi Supabase Mới Nhất ({dbStats.totalChunks.toLocaleString()} đoạn)
+                  </h3>
+                </div>
                 <button
-                  onClick={handleRunQuery}
-                  disabled={isQuerying || !queryInput.trim()}
-                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center gap-1.5 disabled:opacity-50 transition shadow-sm"
+                  onClick={fetchStats}
+                  disabled={isLoadingStats}
+                  className="text-xs text-slate-500 hover:text-slate-900 flex items-center gap-1 px-2.5 py-1 rounded bg-slate-50 border border-slate-200 transition-all cursor-pointer"
                 >
-                  {isQuerying ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                  <span>Hỏi AI &amp; Tìm Kiếm</span>
+                  <RefreshCw className={`w-3 h-3 ${isLoadingStats ? 'animate-spin' : ''}`} />
+                  <span>Làm mới</span>
                 </button>
               </div>
 
-              {queryResult ? (
-                <div className="space-y-4 mt-2">
-                  <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-blue-800 uppercase tracking-wide mb-1.5">
-                      <Sparkles className="w-4 h-4 text-blue-600" />
-                      <span>Câu trả lời tổng hợp (RAG Grounded):</span>
-                    </div>
-                    <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap">
-                      {queryResult.answer}
-                    </p>
-                  </div>
-
-                  <div>
-                    <h3 className="text-xs font-semibold text-slate-600 uppercase mb-2">
-                      Đoạn trích dẫn đối sánh từ Supabase:
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {queryResult.matchedChunks.map((doc, i) => (
-                        <div key={doc.id || i} className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1.5">
-                          <div className="flex items-center justify-between font-medium">
-                            <span className="text-slate-800 font-semibold truncate max-w-[220px]">
-                              {doc.metadata?.title || doc.metadata?.heading || 'Tài liệu'}
-                            </span>
-                            <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-[11px]">
-                              {doc.similarity ? (doc.similarity * 100).toFixed(0) + '% match' : 'Top Match'}
-                            </span>
-                          </div>
-                          <p className="text-slate-600 text-xs line-clamp-4 leading-relaxed bg-white p-2.5 rounded-lg border border-slate-200/80">
-                            {doc.content}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="py-16 text-center text-slate-400">
-                  <Search className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                  <p className="text-xs">Nhập câu hỏi để tìm kiếm ngữ nghĩa và xem câu trả lời được sinh từ Supabase.</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB 2: SUPABASE KNOWLEDGE REPOSITORY */}
-          {activeBottomTab === 'supabase' && (
-            <div className="p-4 flex-1 flex flex-col space-y-3">
-              <div className="flex items-center justify-between text-xs text-slate-500">
-                <span>15 Bản ghi mới nhất trong <code>public.documents</code>:</span>
-                <span className="font-medium text-emerald-600">Supabase Connected</span>
-              </div>
-
-              <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+              {/* Bảng Dữ Liệu */}
+              <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
-                    <tr>
-                      <th className="p-2.5">ID</th>
-                      <th className="p-2.5">Tiêu đề</th>
-                      <th className="p-2.5">Loại</th>
-                      <th className="p-2.5">Nội dung trích đoạn</th>
-                      <th className="p-2.5">Thời gian</th>
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500 text-[11px]">
+                      <th className="py-2.5 px-2 font-medium">Tiêu đề / Nguồn</th>
+                      <th className="py-2.5 px-2 font-medium">Nội dung tóm tắt</th>
+                      <th className="py-2.5 px-2 font-medium">Vector</th>
+                      <th className="py-2.5 px-2 font-medium">Thời gian</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 text-xs">
-                    {dbStats.recentRecords.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="p-8 text-center text-slate-400">
-                          Chưa có dữ liệu nào. Hãy kích hoạt cào hoặc nạp tệp để lưu vào Supabase.
-                        </td>
-                      </tr>
-                    ) : (
-                      dbStats.recentRecords.map((rec) => (
-                        <tr key={rec.id} className="hover:bg-slate-50 transition">
-                          <td className="p-2.5 font-semibold text-blue-600">#{rec.id}</td>
-                          <td className="p-2.5 font-medium text-slate-800 max-w-[200px] truncate">
-                            {rec.metadata?.heading || rec.metadata?.title || 'Tài liệu'}
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {dbStats.recentRecords.length > 0 ? (
+                      dbStats.recentRecords.map((rec, rIdx) => (
+                        <tr key={rIdx} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-2.5 px-2 font-medium text-slate-800 max-w-[160px] truncate" title={rec.title || rec.source_url}>
+                            {rec.title || rec.source_url || 'Bản ghi không tên'}
                           </td>
-                          <td className="p-2.5">
-                            <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px]">
-                              {rec.metadata?.type || 'web'}
-                            </span>
-                          </td>
-                          <td className="p-2.5 text-slate-600 max-w-[320px] truncate">
+                          <td className="py-2.5 px-2 text-slate-500 max-w-[240px] truncate" title={rec.content}>
                             {rec.content}
                           </td>
-                          <td className="p-2.5 text-slate-400 whitespace-nowrap">
-                            {rec.metadata?.created_at ? new Date(rec.metadata.created_at).toLocaleTimeString('vi-VN') : 'Gần đây'}
+                          <td className="py-2.5 px-2 font-mono text-[11px] text-blue-600">
+                            3072D
+                          </td>
+                          <td className="py-2.5 px-2 text-slate-400 text-[11px] whitespace-nowrap">
+                            {rec.created_at ? new Date(rec.created_at).toLocaleTimeString('vi-VN') : 'Vừa xong'}
                           </td>
                         </tr>
                       ))
+                    ) : (
+                      <tr>
+                        <td colSpan={4} className="py-6 text-center text-slate-400 italic">
+                          Chưa có bản ghi nào trong Supabase. Hãy kích hoạt cào hoặc nạp tài liệu.
+                        </td>
+                      </tr>
                     )}
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
+            </section>
 
-          {/* TAB 3: LOGS & CONSOLE */}
-          {activeBottomTab === 'logs' && (
-            <div className="p-4 flex-1 flex flex-col space-y-3">
-              {progressMessage && (
-                <div className="p-3 rounded-xl bg-slate-100 border border-slate-200 text-xs text-slate-700 flex items-center justify-between">
-                  <span>{progressMessage}</span>
-                  <span className="font-semibold text-blue-600">{progressPercent}%</span>
-                </div>
-              )}
+          </div>
 
-              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden font-mono flex flex-col flex-1 shadow-inner">
-                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-950 border-b border-slate-800 text-xs text-slate-400">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80" />
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
-                    <span className="ml-2 text-[11px]">Console Logs</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        const text = logEntries.map((l) => `[${l.timestamp}] [${l.tag}] ${l.message}`).join('\n');
-                        navigator.clipboard.writeText(text);
-                      }}
-                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition"
-                    >
-                      Copy Logs
-                    </button>
-                    <button
-                      onClick={() => setLogEntries([])}
-                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition"
-                    >
-                      Xóa
-                    </button>
-                  </div>
-                </div>
-
-                <div className="p-3 space-y-1 max-h-[360px] overflow-y-auto text-xs leading-relaxed">
-                  {logEntries.length === 0 ? (
-                    <div className="py-12 text-center text-slate-500">
-                      Chưa có nhật ký nào. Hãy nạp tài liệu để xem tiến trình.
-                    </div>
-                  ) : (
-                    logEntries.map((l, i) => (
-                      <div key={i} className="flex items-start gap-2 text-slate-300">
-                        <span className="text-slate-500 shrink-0 text-[11px]">[{l.timestamp}]</span>
-                        <span className="text-blue-400 font-semibold shrink-0">[{l.tag}]</span>
-                        <span className={l.type === 'error' ? 'text-rose-400 font-medium' : l.type === 'success' ? 'text-emerald-400' : 'text-slate-300'}>
-                          {l.message}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                  <div ref={streamEndRef} />
-                </div>
-              </div>
-            </div>
-          )}
-        </section>
-      </div>
-
-      {/* Clean Footer */}
-      <footer className="border-t border-slate-200 bg-white py-3.5 px-6 text-center text-xs text-slate-500 flex flex-wrap items-center justify-between gap-2 mt-8">
-        <div>
-          <span>ABF Enterprise Knowledge Platform</span>
         </div>
-        <div className="flex items-center gap-4 text-[11px]">
-          <span>Supabase pgvector (3072D)</span>
-          <span>•</span>
-          <span>GitHub Actions Cloud Runner</span>
-          <span>•</span>
-          <span>Vercel Edge</span>
-        </div>
+      </main>
+
+      {/* Footer Nhẹ Nhàng */}
+      <footer className="border-t border-slate-200/80 bg-white py-3.5 text-center text-xs text-slate-500">
+        <p>ABF Knowledge Hub &bull; Thiết kế giao diện theo chuẩn mực <strong>evondevKit ui-ux</strong> &bull; Supabase pgvector</p>
       </footer>
-    </main>
+    </div>
   );
 }
