@@ -210,19 +210,6 @@ export async function crawlSinglePage(url: string): Promise<ExtractedPage> {
 
     if (resp.ok) {
       html = await resp.text();
-      // Check if this is a Client-Side Rendered (SPA) page or contains unrendered dynamic templates
-      const hasSpaTemplates =
-        html.includes('{{') ||
-        html.includes('ng-app') ||
-        html.includes('v-bind') ||
-        html.includes('id="__next"') ||
-        html.includes('id="root"') ||
-        html.includes('<app-root');
-
-      if (hasSpaTemplates && (html.includes('{{x.') || html.includes('{{') || html.length < 5000)) {
-        console.warn(`[SPA/Dynamic Page Detected]: Kích hoạt Headless Jina Renderer cho ${url}`);
-        usedFallback = true;
-      }
     } else {
       console.warn(`[Crawler Direct Fetch Failed ${resp.status}]: Kích hoạt Jina Fallback cho ${url}`);
       usedFallback = true;
