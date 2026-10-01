@@ -174,9 +174,16 @@ export default function Home() {
         body: formData,
       });
 
-      const result = await resp.json();
-      if (!resp.ok) {
-        throw new Error(result.error || 'Lỗi xử lý tài liệu');
+      const responseText = await resp.text();
+      let result: any;
+      try {
+        result = JSON.parse(responseText);
+      } catch {
+        throw new Error(`Máy chủ phản hồi không hợp lệ (${resp.status}): ${responseText.slice(0, 150)}`);
+      }
+
+      if (!resp.ok || !result.success) {
+        throw new Error(result.error || `Lỗi xử lý tài liệu (mã ${resp.status})`);
       }
 
       setProgressPercent(100);
