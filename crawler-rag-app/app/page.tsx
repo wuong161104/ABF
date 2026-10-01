@@ -15,7 +15,13 @@ import {
   FileUp,
   Activity,
   Terminal,
-  Copy
+  Copy,
+  Cloud,
+  Play,
+  ExternalLink,
+  Clock,
+  Cpu,
+  Server
 } from 'lucide-react';
 import { PipelineNode, CrawledChunk } from '@/lib/types';
 
@@ -28,12 +34,21 @@ interface LogEntry {
 
 export default function Home() {
   // Navigation tabs
-  const [activeSourceTab, setActiveSourceTab] = useState<'crawler' | 'documents'>('crawler');
+  const [activeSourceTab, setActiveSourceTab] = useState<'crawler' | 'cloud' | 'documents'>('crawler');
   const [activeBottomTab, setActiveBottomTab] = useState<'stream' | 'query' | 'supabase'>('stream');
 
   // Crawler inputs
   const [targetUrl, setTargetUrl] = useState('https://www.vpbank.com.vn/ca-nhan/dich-vu-the');
   const [instantRag, setInstantRag] = useState(true);
+
+  // Cloud Runner (GitHub Actions 6-hour crawler) state
+  const [isTriggeringCloud, setIsTriggeringCloud] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<any>(null);
+  const [cloudSuccessMsg, setCloudSuccessMsg] = useState('');
+  const [cloudErrorMsg, setCloudErrorMsg] = useState('');
+  const [cloudMaxPages, setCloudMaxPages] = useState('0'); // '0' = cào 100% toàn bộ sitemap
+  const [cloudForceRecrawl, setCloudForceRecrawl] = useState(false);
+  const [isPollingCloud, setIsPollingCloud] = useState(false);
 
   // Document inputs
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -73,14 +88,65 @@ export default function Home() {
 
   const streamEndRef = useRef<HTMLDivElement>(null);
 
-  // Load Supabase Stats on mount
+  // Load Supabase Stats & Cloud Status on mount
   useEffect(() => {
     fetchStats();
+    fetchCloudStatus();
+    const interval = setInterval(() => {
+      fetchCloudStatus();
+      fetchStats();
+    }, 12000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
     streamEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logEntries, syncedChunks]);
+
+  const fetchCloudStatus = async () => {
+    setIsPollingCloud(true);
+    try {
+      const resp = await fetch('/api/cloud-crawler');
+      const data = await resp.json();
+      if (data.success) {
+        setCloudStatus(data);
+      }
+    } catch (e) {
+      console.error('Lỗi lấy trạng thái Cloud Runner:', e);
+    } finally {
+      setIsPollingCloud(false);
+    }
+  };
+
+  const handleTriggerCloudCrawler = async () => {
+    if (!targetUrl) return;
+    setIsTriggeringCloud(true);
+    setCloudSuccessMsg('');
+    setCloudErrorMsg('');
+    try {
+      const resp = await fetch('/api/cloud-crawler', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetUrl,
+          maxPages: cloudMaxPages,
+          saveToSupabase: true,
+          forceRecrawl: cloudForceRecrawl,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || 'Lỗi khi kích hoạt Cloud Runner');
+      }
+      setCloudSuccessMsg(data.message);
+      fetchCloudStatus();
+      fetchStats();
+    } catch (err: any) {
+      setCloudErrorMsg(err.message);
+    } finally {
+      setIsTriggeringCloud(false);
+    }
+  };
 
   const fetchStats = async () => {
     setIsLoadingStats(true);
@@ -536,7 +602,7 @@ export default function Home() {
         {/* 2. DUAL INGESTION COMMAND CENTER */}
         <section className="bg-[#0C111C] border border-[#1A2333] rounded-2xl p-5 shadow-xl">
           {/* Ingestion Mode Toggle Tabs */}
-          <div className="flex items-center gap-2 border-b border-[#1A2333] pb-3 mb-5">
+          <div className="flex flex-wrap items-center gap-2 border-b border-[#1A2333] pb-3 mb-5">
             <button
               onClick={() => setActiveSourceTab('crawler')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition ${
@@ -546,7 +612,22 @@ export default function Home() {
               }`}
             >
               <Globe className="w-4 h-4" />
-              <span>Deep Web Crawler (Toàn diện website & link con)</span>
+              <span>Cào Nhanh Web (Instant RAG)</span>
+            </button>
+
+            <button
+              onClick={() => setActiveSourceTab('cloud')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition relative ${
+                activeSourceTab === 'cloud'
+                  ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+              }`}
+            >
+              <Cloud className="w-4 h-4 text-indigo-400" />
+              <span>🚀 Cào Ngầm Cloud Runner (GitHub Actions 6h)</span>
+              {cloudStatus?.isRunning && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping ml-1" />
+              )}
             </button>
 
             <button
@@ -672,20 +753,235 @@ export default function Home() {
                     </span>
                   </div>
                 </div>
-                <a
-                  href="https://github.com/wuong161104/ABF/actions"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 hover:border-indigo-400 font-mono text-[11px] whitespace-nowrap transition flex items-center gap-1.5"
+                <button
+                  onClick={() => setActiveSourceTab('cloud')}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 hover:border-indigo-400 font-mono text-[11px] whitespace-nowrap transition flex items-center gap-1.5 shadow-sm"
                 >
-                  <span>Mở GitHub Cloud Runner (6h)</span>
-                  <span>↗</span>
-                </a>
+                  <Cloud className="w-3.5 h-3.5 text-indigo-300" />
+                  <span>Kích hoạt Cào Ngầm Cloud (6h)</span>
+                  <span>→</span>
+                </button>
               </div>
             </div>
           )}
 
-          {/* TAB 2: DOCUMENT & PDF MULTIMODAL INGESTION */}
+          {/* TAB 2: CLOUD RUNNER STATION (GITHUB ACTIONS 6H DEEP CRAWLER) */}
+          {activeSourceTab === 'cloud' && (
+            <div className="space-y-5 animate-fadeIn">
+              {/* Intro banner */}
+              <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-950/70 via-slate-900 to-indigo-950/70 border border-indigo-500/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/40 text-indigo-400 flex items-center justify-center shrink-0">
+                    <Cloud className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-bold text-white">Universal Deep Web Crawler Cloud Runner</h3>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-900/60 text-indigo-300 border border-indigo-700/50">
+                        Máy chủ Ubuntu • Max 6 Tiếng Chạy Ngầm
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      Kích hoạt trực tiếp máy ảo GitHub Actions chạy ngầm script Python Playwright để bóc tách 100% sitemap (6.298+ link) và đồng bộ trực tiếp về Supabase.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={fetchCloudStatus}
+                    disabled={isPollingCloud}
+                    className="px-3 py-1.5 rounded-lg bg-[#121A2B] border border-[#223048] hover:border-indigo-400/50 text-slate-300 text-xs font-mono flex items-center gap-1.5 transition"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isPollingCloud ? 'animate-spin' : ''}`} />
+                    <span>Làm mới trạng thái</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* URL Input & Presets */}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+                    <span>🔗 Website mục tiêu cần cào ngầm:</span>
+                  </label>
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="text-slate-500 mr-1">Presets:</span>
+                    {[
+                      { label: 'MBBank Toàn Site', url: 'https://mbbank.com.vn/' },
+                      { label: 'VPBank Thẻ', url: 'https://www.vpbank.com.vn/ca-nhan/dich-vu-the' },
+                      { label: 'VIB Thẻ', url: 'https://www.vib.com.vn/vn/the-tin-dung' },
+                      { label: 'Techcombank', url: 'https://techcombank.com/khach-hang-ca-nhan/the' },
+                    ].map((p) => (
+                      <button
+                        key={p.label}
+                        onClick={() => setTargetUrl(p.url)}
+                        className="px-2.5 py-1 rounded-md bg-[#131B2A] border border-[#212E44] hover:border-indigo-500/50 text-slate-300 hover:text-indigo-300 transition"
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <input
+                    type="url"
+                    value={targetUrl}
+                    onChange={(e) => setTargetUrl(e.target.value)}
+                    placeholder="https://..."
+                    className="w-full bg-[#080B12] border border-[#212E44] rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition"
+                  />
+                </div>
+              </div>
+
+              {/* Crawler Configuration Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="p-3.5 rounded-xl bg-[#090D18] border border-[#1A2333]">
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">
+                    Số lượng trang tối đa (max_pages):
+                  </label>
+                  <select
+                    value={cloudMaxPages}
+                    onChange={(e) => setCloudMaxPages(e.target.value)}
+                    className="w-full bg-[#06080F] border border-[#223048] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="0">0 (Cào toàn bộ 100% sitemap - Khuyến nghị)</option>
+                    <option value="50">50 trang quan trọng nhất</option>
+                    <option value="100">100 trang</option>
+                    <option value="300">300 trang</option>
+                    <option value="1000">1.000 trang</option>
+                  </select>
+                  <p className="text-[10px] text-slate-500 mt-1">Chọn 0 để crawler quét vét cạn tất cả link trong 6 tiếng.</p>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-[#090D18] border border-[#1A2333] flex flex-col justify-between">
+                  <div>
+                    <span className="text-xs font-semibold text-slate-300 block mb-1">Supabase Realtime Hub:</span>
+                    <p className="text-[11px] text-emerald-400 font-mono">Đồng bộ trực tiếp pgvector (3072D)</p>
+                  </div>
+                  <p className="text-[10px] text-slate-500">Mỗi trang cào xong sẽ tự động nạp thẳng vào database.</p>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-[#090D18] border border-[#1A2333] flex flex-col justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={cloudForceRecrawl}
+                      onChange={(e) => setCloudForceRecrawl(e.target.checked)}
+                      className="rounded bg-slate-900 border-slate-700 text-indigo-500 focus:ring-0"
+                    />
+                    <span>Cào lại từ đầu (Bỏ qua Resume)</span>
+                  </label>
+                  <p className="text-[10px] text-slate-500">Mặc định crawler sẽ tiếp tục từ link chưa cào để tiết kiệm thời gian.</p>
+                </div>
+              </div>
+
+              {/* Trigger Action Button */}
+              <div className="flex flex-col sm:flex-row items-center gap-3">
+                <button
+                  onClick={handleTriggerCloudCrawler}
+                  disabled={isTriggeringCloud}
+                  className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-bold text-sm flex items-center justify-center gap-2.5 shadow-xl shadow-indigo-950/50 transition disabled:opacity-50"
+                >
+                  {isTriggeringCloud ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Đang phát tín hiệu lên máy chủ GitHub...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-4 h-4 fill-white text-white" />
+                      <span>KÍCH HOẠT TIẾN TRÌNH CÀO NGẦM TRÊN CLOUD (6 TIẾNG)</span>
+                    </>
+                  )}
+                </button>
+
+                {cloudStatus?.latestRun?.htmlUrl && (
+                  <a
+                    href={cloudStatus.latestRun.htmlUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-4 py-3 rounded-xl bg-[#0F1626] border border-[#23324C] hover:border-indigo-400 text-indigo-300 text-xs font-mono flex items-center gap-2 transition"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Mở xem Console Log trực tiếp (GitHub Actions)</span>
+                  </a>
+                )}
+              </div>
+
+              {/* Alert Messages */}
+              {cloudSuccessMsg && (
+                <div className="p-3.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-300 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{cloudSuccessMsg}</span>
+                </div>
+              )}
+
+              {cloudErrorMsg && (
+                <div className="p-3.5 rounded-xl bg-rose-950/60 border border-rose-500/40 text-xs text-rose-300 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{cloudErrorMsg}</span>
+                </div>
+              )}
+
+              {/* Live Cloud Status Card */}
+              <div className="p-4 rounded-xl bg-[#080B14] border border-[#1E293B] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-slate-300">
+                    <Server className="w-4 h-4 text-indigo-400" />
+                    <span>Trạng Thái Tiến Trình Chạy Ngầm Cloud</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {cloudStatus?.isRunning ? (
+                      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 text-[11px] font-mono">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                        Đang cào ngầm trên Cloud
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-1 rounded-full bg-slate-900 text-slate-400 border border-slate-800 text-[11px] font-mono">
+                        Sẵn sàng kích hoạt
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {cloudStatus?.latestRun ? (
+                  <div className="p-3 rounded-lg bg-[#0C111C] border border-[#1A2333] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+                    <div className="flex items-center gap-2 text-slate-300">
+                      <span className="text-slate-500">Run #{cloudStatus.latestRun.runNumber}:</span>
+                      <span className="text-white font-bold">{cloudStatus.latestRun.name}</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold ${
+                        cloudStatus.latestRun.status === 'in_progress'
+                          ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                          : cloudStatus.latestRun.conclusion === 'success'
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                          : 'bg-slate-800 text-slate-300'
+                      }`}>
+                        {cloudStatus.latestRun.status === 'in_progress' ? 'Đang chạy' : cloudStatus.latestRun.conclusion || cloudStatus.latestRun.status}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-slate-400 text-[11px]">
+                      <span>Khởi chạy: {new Date(cloudStatus.latestRun.createdAt).toLocaleString('vi-VN')}</span>
+                      <a
+                        href={cloudStatus.latestRun.htmlUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-cyan-400 hover:underline flex items-center gap-1"
+                      >
+                        <span>Xem tiến trình</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 italic">Chưa có thông tin phiên chạy gần nhất.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: DOCUMENT & PDF MULTIMODAL INGESTION */}
           {activeSourceTab === 'documents' && (
             <div className="space-y-4">
               <div
